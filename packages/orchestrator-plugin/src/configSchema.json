@@ -2,11 +2,12 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
-    "pollIntervalMs": {
-      "type": "integer",
-      "minimum": 1000,
-      "maximum": 60000,
-      "default": 3000
+    "allowedRoots": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Canonical Server C workspace roots Hermes may register or mutate."
     }
   },
   "additionalProperties": false

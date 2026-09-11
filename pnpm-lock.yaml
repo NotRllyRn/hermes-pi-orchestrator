@@ -904,19 +904,9 @@ importers:
       '@blackbelt-technology/dashboard-plugin-runtime':
         specifier: ^0.8.0
         version: link:../dashboard-plugin-runtime
-    devDependencies:
-      '@types/react':
-        specifier: ^19.0.0
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.0.0
-        version: 19.2.3(@types/react@19.2.17)
-      react:
-        specifier: ^19.0.0
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.0.0
-        version: 19.2.7(react@19.2.7)
+      '@blackbelt-technology/pi-dashboard-shared':
+        specifier: ^0.8.0
+        version: link:../shared
 
   packages/pi-forms-bpmn: {}
 

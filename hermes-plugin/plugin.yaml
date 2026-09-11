@@ -1,13 +1,16 @@
 name: pi-orchestrator
-version: "0.1.0"
-description: Persistent Hermes-to-Pi coding task orchestration
+version: "0.2.0"
+description: Human-gated Hermes supervision of persistent PI Dashboard sessions
 provides_tools:
-  - pi_start
-  - pi_send
-  - pi_status
-  - pi_stop
-  - pi_queue
-  - pi_queue_status
+  - pi_projects
+  - pi_project_register
+  - pi_project_status
+  - pi_task_submit
+  - pi_task_resolve
+  - pi_task_abort
+  - pi_worker_send
+  - pi_recent_activity
+  - pi_diagnostics
 provides_hooks:
   - pre_llm_call
-  - post_llm_call
+  - pre_tool_call

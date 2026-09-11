@@ -2,4 +2,4 @@
 
 | File | Purpose |
 | ------ | --------- |
-| `index.ts` | Authenticated server-side proxy from dashboard routes to the Hermes orchestrator control API. |
+| `index.ts` | Server C project canonicalization and bounded redacted Dashboard-event diagnostics routes. |

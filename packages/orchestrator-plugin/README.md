@@ -1,25 +1,14 @@
-# Hermes Pi Orchestrator dashboard plugin
+# Hermes orchestration plugin for PI Dashboard
 
-A pi-dashboard plugin that monitors and controls Pi sessions and queued coding tasks owned by the Hermes plugin.
+Minimal Server C extension used by the Hermes headless Dashboard client. PI Dashboard remains the only Pi session/process/event hub.
 
-The panel appears in **Settings → General → Hermes Pi Orchestrator**. It shows connection state, process status and PID, model, working directory, latest result, and queued task state. Operators can send follow-ups, resume or stop sessions, enqueue tasks, and cancel queued work.
+The plugin currently provides:
 
-## Server configuration
+- canonical project inspection under configured workspace roots;
+- matching Dashboard sessions for primary binding;
+- bounded, secret-redacted event diagnostics;
+- server-side foundations for atomic worktree + forked-session transactions.
 
-The browser never receives the orchestrator token. The dashboard server proxies all requests to the authenticated control API on the Hermes host.
+Configure `plugins.hermes-pi-orchestrator.allowedRoots` in PI Dashboard settings before project registration. Keep Dashboard bound to loopback and expose it to Server B only through the dedicated SSH local-forward tunnel.
 
-On Server A (Hermes), configure:
-
-```sh
-export PI_ORCHESTRATOR_API_BIND=0.0.0.0:8787
-export PI_ORCHESTRATOR_API_TOKEN='replace-with-a-long-random-token'
-```
-
-On Server B (pi-dashboard), configure:
-
-```sh
-export HERMES_ORCHESTRATOR_URL='http://server-a:8787'
-export HERMES_ORCHESTRATOR_TOKEN='replace-with-the-same-token'
-```
-
-Keep port 8787 restricted to Server B with a firewall, private network, or SSH tunnel. A non-loopback Hermes API bind is rejected unless a token is configured.
+No browser UI or separate Pi process manager is included. Hermes uses Dashboard's existing browser WebSocket protocol for snapshots, replay, `followUp`, `steer`, spawn/resume, abort, and live events.

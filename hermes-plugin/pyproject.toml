@@ -1,7 +1,8 @@
 [project]
 name = "hermes-pi-orchestrator"
-version = "0.1.0"
+version = "0.2.0"
 requires-python = ">=3.10"
+dependencies = ["websocket-client>=1.8,<2"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

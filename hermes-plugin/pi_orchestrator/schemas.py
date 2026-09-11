@@ -5,80 +5,70 @@ def schema(name: str, description: str, properties: dict, required: tuple[str, .
     return {
         "name": name,
         "description": description,
-        "parameters": {
-            "type": "object",
-            "properties": properties,
-            "required": list(required),
-        },
+        "parameters": {"type": "object", "properties": properties, "required": list(required)},
     }
 
 
-STRING = {"type": "string"}
-MODEL = {"type": "string", "description": "Optional Pi model pattern or provider/model ID."}
-
-PI_START = schema(
-    "pi_start",
-    "Start or reconnect the persistent Pi coding session bound to this Hermes conversation.",
-    {
-        "working_dir": {"type": "string", "description": "Project directory on the Pi host."},
-        "model": MODEL,
-        "thinking": {
-            "type": "string",
-            "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
-        },
-    },
-    ("working_dir",),
-)
-
-PI_SEND = schema(
-    "pi_send",
-    "Send work to this conversation's persistent Pi session and return after Pi accepts it.",
-    {
-        "message": {"type": "string", "description": "Complete coding instruction for Pi."},
-        "streaming_behavior": {
-            "type": "string",
-            "enum": ["followUp", "steer"],
-            "default": "followUp",
-        },
-    },
-    ("message",),
-)
-
-PI_STATUS = schema(
-    "pi_status",
-    "Inspect this conversation's persistent Pi status and latest result.",
-    {},
-)
-
-PI_STOP = schema(
-    "pi_stop",
-    "Stop this conversation's Pi process while retaining its resumable session file.",
-    {},
-)
-
-PI_QUEUE = schema(
-    "pi_queue",
-    "Add a standalone coding task to the global serialized Pi queue.",
-    {
-        "prompt": {"type": "string", "description": "Complete coding task."},
-        "working_dir": {"type": "string", "description": "Project directory on the Pi host."},
-        "model": MODEL,
-        "priority": {"type": "integer", "default": 0},
-    },
-    ("prompt", "working_dir"),
-)
-
-PI_QUEUE_STATUS = schema(
-    "pi_queue_status",
-    "Inspect one queued Pi task or list the global queue.",
-    {"task_id": STRING},
-)
+PROJECT = {"type": "string", "description": "Registered project id, name, or canonical repository path."}
+SESSION_ID = {"type": "string", "description": "Known PI Dashboard session id."}
 
 TOOLS = {
-    "pi_start": PI_START,
-    "pi_send": PI_SEND,
-    "pi_status": PI_STATUS,
-    "pi_stop": PI_STOP,
-    "pi_queue": PI_QUEUE,
-    "pi_queue_status": PI_QUEUE_STATUS,
+    "pi_projects": schema("pi_projects", "List registered projects with compact live status.", {}),
+    "pi_project_register": schema(
+        "pi_project_register",
+        "Register a Server C Git repository and bind one unambiguous existing persistent Pi session.",
+        {
+            "repo_path": {"type": "string", "description": "Absolute repository path on Server C."},
+            "project_name": {"type": "string"},
+            "session_id": {"type": "string", "description": "Required when several existing sessions are eligible."},
+        },
+        ("repo_path",),
+    ),
+    "pi_project_status": schema(
+        "pi_project_status", "Get deterministic low-context project, worker, usage, and transport status.",
+        {"project": PROJECT}, ("project",),
+    ),
+    "pi_task_submit": schema(
+        "pi_task_submit",
+        "Submit new project work. Never accepts a concurrency strategy. Busy primaries return a side-effect-free Queue/Steer/Parallel decision.",
+        {"project": PROJECT, "task": {"type": "string", "description": "Complete coding task."}},
+        ("project", "task"),
+    ),
+    "pi_task_resolve": schema(
+        "pi_task_resolve",
+        "Resolve a pending busy-primary decision only after a later raw user turn explicitly chooses one option.",
+        {
+            "decision_id": {"type": "string"},
+            "choice": {"type": "string", "enum": ["queue", "steer", "parallel"]},
+        },
+        ("decision_id", "choice"),
+    ),
+    "pi_task_abort": schema(
+        "pi_task_abort", "Abort the current run of a known Dashboard worker without deleting its Pi session.",
+        {"worker_id": SESSION_ID}, ("worker_id",),
+    ),
+    "pi_worker_send": schema(
+        "pi_worker_send",
+        "Expert escape hatch for messaging a known worker. Use pi_task_submit for independent project work so the human concurrency gate applies.",
+        {
+            "worker_id": SESSION_ID,
+            "message": {"type": "string"},
+            "delivery": {"type": "string", "enum": ["steer", "followUp"]},
+        },
+        ("worker_id", "message"),
+    ),
+    "pi_recent_activity": schema(
+        "pi_recent_activity", "Read bounded reduced activity; never returns a full transcript.",
+        {"worker_id": SESSION_ID, "limit": {"type": "integer", "minimum": 1, "maximum": 50}},
+        ("worker_id", "limit"),
+    ),
+    "pi_diagnostics": schema(
+        "pi_diagnostics", "Read an explicit bounded diagnostic slice from Dashboard.",
+        {
+            "worker_id": SESSION_ID,
+            "kind": {"type": "string", "enum": ["events", "log"]},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+        },
+        ("worker_id", "kind", "limit"),
+    ),
 }

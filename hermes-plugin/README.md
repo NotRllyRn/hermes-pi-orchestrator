@@ -1,39 +1,31 @@
 # Hermes Pi Orchestrator plugin
 
-Persistent Pi coding sessions and a serialized global task queue for Hermes Agent.
+Human-gated supervision of persistent Pi sessions owned by PI Dashboard on Server C. The plugin runs on Hermes Server B as a headless Dashboard browser client. It never launches `pi --mode rpc`, owns Pi processes, or copies Pi transcripts.
 
 ## Install
-
-From this repository checkout on the Hermes host:
 
 ```sh
 scripts/install-hermes-plugin.sh
 ```
 
-Restart the long-running Hermes gateway after install or update.
+The installer enables the plugin and `plugins.entries.pi-orchestrator.allow_gateway_injection`. Restart the long-running Hermes gateway after install or update.
 
 ## Tools
 
-- `pi_start` — start or reconnect the Pi session bound to the current Hermes conversation.
-- `pi_send` — submit a prompt or steer/follow-up message.
-- `pi_status` — inspect status, PID, latest result, and errors.
-- `pi_stop` — stop the process while retaining its resumable session file.
-- `pi_queue` — enqueue standalone work globally.
-- `pi_queue_status` — inspect queue state and results.
+- `pi_projects`, `pi_project_status` — compact live project/session/usage state.
+- `pi_project_register` — canonicalize a Server C repository and bind one existing session.
+- `pi_task_submit` — submit serial work or create a side-effect-free busy decision.
+- `pi_task_resolve` — execute Queue, Steer, or Parallel only after explicit later-turn evidence.
+- `pi_task_abort`, `pi_worker_send` — known-worker controls.
+- `pi_recent_activity`, `pi_diagnostics` — bounded observability.
 
-Pi output is returned asynchronously through Hermes gateway message injection. The installer explicitly enables `plugins.entries.pi-orchestrator.allow_gateway_injection`; this permission is required for background completion messages. State uses atomic JSON files under `$HERMES_HOME/pi-orchestrator/`.
+Queue maps to Dashboard `delivery: "followUp"`; Steer maps to `delivery: "steer"`. Raw `pre_llm_call` input, project state version, decision TTL, and `pre_tool_call` enforce the mandatory human choice independently of model intent.
 
 ## Environment
 
 ```sh
-# Optional: run Pi on Server C over key-authenticated SSH.
-export PI_ORCHESTRATOR_PI_HOST='pi@server-c'
-export PI_ORCHESTRATOR_PI_BIN='pi'
-export PI_ORCHESTRATOR_REMOTE_SESSION_DIR='~/.hermes/pi-orchestrator/pi-sessions'
-
-# Control API for the dashboard on Server B.
-export PI_ORCHESTRATOR_API_BIND='0.0.0.0:8787'
-export PI_ORCHESTRATOR_API_TOKEN='replace-with-a-long-random-token'
+# Local end of Server B's independently supervised SSH tunnel to Server C.
+export PI_DASHBOARD_URL='http://127.0.0.1:18000'
 ```
 
-SSH uses `BatchMode=yes` and never prompts for credentials. Configure host keys and key-based login before starting Hermes. Keep the control API on a private network or firewall it to Server B.
+State lives in `$HERMES_HOME/pi-orchestrator/state.db` with SQLite WAL. Pi JSONL remains authoritative on Server C. Browser replay sequence cursors prevent duplicate activity and notifications after reconnect.

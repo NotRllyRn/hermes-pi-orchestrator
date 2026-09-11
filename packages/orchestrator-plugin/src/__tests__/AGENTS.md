@@ -2,5 +2,5 @@
 
 | File | Purpose |
 | ------ | --------- |
-| `manifest.test.ts` | Validates plugin manifest identity, server entry, and settings claim. |
-| `server-client.test.ts` | Verifies authenticated upstream requests, control payload forwarding, and errors. |
+| `manifest.test.ts` | Validates the server-only Dashboard plugin manifest. |
+| `server.test.ts` | Allowed-root canonicalization, symlink escape, diagnostic redaction, and size-cap tests. |

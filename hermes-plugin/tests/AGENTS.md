@@ -2,7 +2,7 @@
 
 | File | Purpose |
 | ------ | --------- |
-| `test_api.py` | Control API authentication, session listing/control, and non-loopback security tests. |
-| `test_queue.py` | Queue completion and cancellation behavior tests. |
-| `test_rpc.py` | Command transport, event extraction, subprocess correlation, and persistence tests. |
-| `test_state.py` | Atomic state, recovery, ordering, and session filename tests. |
+| `test_choice_parser.py` | Explicit, ambiguous, negated, and embedded concurrency-choice cases. |
+| `test_dashboard_client.py` | Browser URL, snapshot subscription, replay cursor, and duplicate-event tests. |
+| `test_service.py` | Busy side-effect-free gate, later-turn evidence, serial control, binding, and notification tests. |
+| `test_store.py` | SQLite restart continuity and replay activity deduplication tests. |
