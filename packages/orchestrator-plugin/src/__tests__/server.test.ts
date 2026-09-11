@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { boundedJson, canonicalRepository, redact } from "../server/index.js";
+import { boundedJson, canonicalRepository, createParallelWorker, redact } from "../server/index.js";
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync("git", ["-C", cwd, ...args], { stdio: "ignore" });
@@ -33,5 +33,65 @@ describe("Server C safety helpers", () => {
       nested: { apiKey: "[REDACTED]", safe: "ok" },
     });
     expect(boundedJson([{ text: "x".repeat(500) }], 32)).toEqual({ data: [], truncated: true });
+  });
+
+  it("creates and dispatches a parallel worker transaction", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "orchestrator-parallel-"));
+    const repo = path.join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init");
+    git(repo, "config", "user.email", "test@example.com");
+    git(repo, "config", "user.name", "Test");
+    git(repo, "commit", "--allow-empty", "-m", "init");
+    let cwd = "";
+    const sent: string[] = [];
+    const ctx = {
+      sessionManager: { listAll: () => [{ id: "child", cwd, sessionFile: "/sessions/child.jsonl" }] },
+      spawnSession: async (options: { cwd: string }) => {
+        cwd = options.cwd;
+        return { success: true, spawnToken: "spawn-1" };
+      },
+      sendToSession: (id: string, prompt: string) => {
+        sent.push(`${id}:${prompt}`);
+        return true;
+      },
+      abortSpawnedRun: async () => true,
+    } as unknown as Parameters<typeof createParallelWorker>[0];
+
+    const result = await createParallelWorker(
+      ctx,
+      { allowedRoots: [root] },
+      { projectId: "project-1", taskId: "12345678-rest", repoRoot: repo, prompt: "Build feature" },
+    );
+
+    expect(result.sessionId).toBe("child");
+    expect(existsSync(result.worktreePath)).toBe(true);
+    expect(sent).toEqual(["child:Build feature"]);
+  });
+
+  it("rolls back the worktree when Dashboard spawn fails", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "orchestrator-rollback-"));
+    const repo = path.join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init");
+    git(repo, "config", "user.email", "test@example.com");
+    git(repo, "config", "user.name", "Test");
+    git(repo, "commit", "--allow-empty", "-m", "init");
+    const ctx = {
+      sessionManager: { listAll: () => [] },
+      spawnSession: async () => ({ success: false, message: "no spawn" }),
+      abortSpawnedRun: async () => true,
+    } as unknown as Parameters<typeof createParallelWorker>[0];
+
+    await expect(createParallelWorker(
+      ctx,
+      { allowedRoots: [root] },
+      { projectId: "project-1", taskId: "87654321-rest", repoRoot: repo, prompt: "Fail spawn" },
+    )).rejects.toThrow("no spawn");
+
+    expect(existsSync(path.join(root, ".hermes-worktrees", "fail-spawn-87654321"))).toBe(false);
+    expect(execFileSync("git", ["-C", repo, "branch", "--list", "hermes/fail-spawn-87654321"], {
+      encoding: "utf8",
+    }).trim()).toBe("");
   });
 });

@@ -174,21 +174,19 @@ class Orchestrator:
             result = {"worker_session_id": session_id}
         elif normalized == "parallel":
             payload = {
-                "requestId": task["task_id"],
                 "projectId": project["project_id"],
-                "primarySessionFile": project.get("primary_session_file"),
+                "taskId": task["task_id"],
                 "repoRoot": project["repo_path"],
-                "task": task["task"],
-                "dirtyPolicy": "reject",
+                "prompt": task["task"],
             }
             result = self.dashboard.parallel_spawn(payload)
-            status = "parallel_starting"
+            status = "running"
         else:
             raise PolicyError("Choice must be queue, steer, or parallel")
         self.store.resolve_decision(decision["decision_id"], normalized)
         updated = self.store.update_task(
             task["task_id"], status=status,
-            worker_session_id=result.get("childSessionId") or result.get("worker_session_id"),
+            worker_session_id=result.get("sessionId") or result.get("worker_session_id"),
         )
         return {"status": status, "task": updated, "dashboard": result}
 

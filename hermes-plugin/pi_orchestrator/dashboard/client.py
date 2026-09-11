@@ -191,7 +191,7 @@ class DashboardClient:
         return self.rest("GET", f"/api/hermes-orchestrator/session/{quote(session_id, safe='')}/diagnostics?{query}")
 
     def parallel_spawn(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self.rest("POST", "/api/hermes-orchestrator/parallel-spawn", payload)
+        return self.rest("POST", "/api/hermes-orchestrator/parallel", payload)
 
     def rest(self, method: str, path: str, body: Any = None) -> Any:
         data = json.dumps(body).encode() if body is not None else None

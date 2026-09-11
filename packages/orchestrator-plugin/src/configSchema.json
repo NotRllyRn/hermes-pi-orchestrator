@@ -8,6 +8,14 @@
       "minItems": 1,
       "uniqueItems": true,
       "description": "Canonical Server C workspace roots Hermes may register or mutate."
+    },
+    "worktreeRoot": {
+      "type": "string",
+      "description": "Optional worktree parent; defaults under the first allowed root."
+    },
+    "initCommand": {
+      "type": "string",
+      "description": "Optional operator-configured shell command run before Pi starts."
     }
   },
   "additionalProperties": false

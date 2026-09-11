@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
 import type { ServerPluginContext } from "@blackbelt-technology/dashboard-plugin-runtime/server";
@@ -6,6 +6,8 @@ import { execFileSync } from "@blackbelt-technology/pi-dashboard-shared/platform
 
 interface PluginConfig {
   allowedRoots?: string[];
+  worktreeRoot?: string;
+  initCommand?: string;
 }
 
 interface SessionView {
@@ -15,7 +17,24 @@ interface SessionView {
   status?: string;
   startedAt?: number;
   model?: string;
+  sessionId?: string;
   [key: string]: unknown;
+}
+
+interface ParallelRequest {
+  projectId: string;
+  taskId: string;
+  repoRoot: string;
+  prompt: string;
+  baseBranch?: string;
+}
+
+interface ParallelResult {
+  sessionId: string;
+  sessionFile?: string;
+  branch: string;
+  worktreePath: string;
+  spawnToken: string;
 }
 
 function inside(root: string, candidate: string): boolean {
@@ -68,6 +87,95 @@ export function boundedJson(value: unknown, maxBytes = 32 * 1024): { data: JsonV
   };
 }
 
+export async function createParallelWorker(
+  ctx: ServerPluginContext,
+  config: PluginConfig,
+  request: ParallelRequest,
+): Promise<ParallelResult> {
+  const prepared = prepareParallelWorktree(config, request);
+  let spawnToken: string | undefined;
+  let sessionId: string | undefined;
+  let committed = false;
+
+  try {
+    const spawned = await ctx.spawnSession({ cwd: prepared.worktreePath, mode: "local", sandbox: "workspace-write" });
+    if (!spawned.success || !spawned.spawnToken) throw new Error(spawned.message ?? "Dashboard rejected worker spawn");
+    spawnToken = spawned.spawnToken;
+    const session = await waitForSession(ctx, prepared.worktreePath);
+    sessionId = session.id ?? session.sessionId;
+    if (!sessionId) throw new Error("spawned Dashboard session has no id");
+    if (!ctx.sendToSession(sessionId, request.prompt)) throw new Error("failed to send task to spawned worker");
+    committed = true;
+    return { sessionId, sessionFile: session.sessionFile, ...prepared, spawnToken };
+  } finally {
+    if (!committed) await rollbackParallel(ctx, prepared, sessionId, spawnToken);
+  }
+}
+
+function prepareParallelWorktree(
+  config: PluginConfig,
+  request: ParallelRequest,
+): Pick<ParallelResult, "branch" | "worktreePath"> & { repoRoot: string } {
+  const roots = config.allowedRoots ?? [];
+  if (roots.length === 0) throw new Error("plugin allowedRoots is not configured");
+  const repoRoot = canonicalRepository(request.repoRoot, roots);
+  const root = realpathSync(roots[0]);
+  const requestedRoot = path.resolve(config.worktreeRoot ?? path.join(root, ".hermes-worktrees"));
+  if (!inside(root, requestedRoot)) throw new Error("worktreeRoot is outside configured allowedRoots");
+  mkdirSync(requestedRoot, { recursive: true });
+  const worktreeRoot = realpathSync(requestedRoot);
+  if (!inside(root, worktreeRoot)) throw new Error("canonical worktreeRoot escapes configured allowedRoots");
+  const suffix = request.taskId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "task";
+  const slug = request.prompt.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "work";
+  const branch = `hermes/${slug}-${suffix}`;
+  const worktreePath = path.join(worktreeRoot, `${slug}-${suffix}`);
+  try {
+    execFileSync("git", ["-C", repoRoot, "worktree", "add", "-b", branch, worktreePath, request.baseBranch ?? "HEAD"], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    if (config.initCommand) {
+      execFileSync("sh", ["-lc", config.initCommand], { cwd: worktreePath, encoding: "utf8", timeout: 120_000 });
+    }
+    return { repoRoot, branch, worktreePath };
+  } catch (error) {
+    tryGit(repoRoot, ["worktree", "remove", "--force", worktreePath]);
+    tryGit(repoRoot, ["branch", "-D", branch]);
+    throw error;
+  }
+}
+
+async function rollbackParallel(
+  ctx: ServerPluginContext,
+  prepared: Pick<ParallelResult, "branch" | "worktreePath"> & { repoRoot: string },
+  sessionId?: string,
+  spawnToken?: string,
+): Promise<void> {
+  if (spawnToken || sessionId) await ctx.abortSpawnedRun({ sessionId, spawnToken, graceful: false });
+  tryGit(prepared.repoRoot, ["worktree", "remove", "--force", prepared.worktreePath]);
+  tryGit(prepared.repoRoot, ["branch", "-D", prepared.branch]);
+}
+
+async function waitForSession(ctx: ServerPluginContext, cwd: string): Promise<SessionView> {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const session = (ctx.sessionManager.listAll() as SessionView[]).find(
+      (item) => item.cwd && realpathOrOriginal(item.cwd) === cwd,
+    );
+    if (session) return session;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("spawned worker did not register within 20 seconds");
+}
+
+function tryGit(repoRoot: string, args: string[]): void {
+  try {
+    execFileSync("git", ["-C", repoRoot, ...args], { encoding: "utf8", timeout: 30_000 });
+  } catch {
+    // Best-effort rollback; preserve the original transaction failure.
+  }
+}
+
 export function register(ctx: ServerPluginContext): void {
   const config = ctx.getPluginConfig<PluginConfig>();
   const configuredRoots = config.allowedRoots ?? [];
@@ -96,6 +204,34 @@ export function register(ctx: ServerPluginContext): void {
       } catch (error) {
         ctx.logger.warn("Project inspection rejected", error);
         return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+      }
+    },
+  );
+
+  const activeProjects = new Set<string>();
+  const completedTasks = new Map<string, ParallelResult>();
+  ctx.fastify.post<{ Body: ParallelRequest }>(
+    "/api/hermes-orchestrator/parallel",
+    async (request, reply) => {
+      const body = request.body;
+      if (!body?.projectId || !body.taskId || !body.repoRoot || !body.prompt) {
+        return reply.code(400).send({ error: "projectId, taskId, repoRoot, and prompt are required" });
+      }
+      const completed = completedTasks.get(body.taskId);
+      if (completed) return completed;
+      if (activeProjects.has(body.projectId)) {
+        return reply.code(409).send({ error: "parallel creation is already active for this project" });
+      }
+      activeProjects.add(body.projectId);
+      try {
+        const result = await createParallelWorker(ctx, config, body);
+        completedTasks.set(body.taskId, result);
+        return result;
+      } catch (error) {
+        ctx.logger.error("Parallel worker transaction rolled back", error);
+        return reply.code(500).send({ error: error instanceof Error ? error.message : String(error) });
+      } finally {
+        activeProjects.delete(body.projectId);
       }
     },
   );

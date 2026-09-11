@@ -34,7 +34,7 @@ class Dashboard:
         return {"session": session_id, "kind": kind, "limit": limit}
 
     def parallel_spawn(self, payload):
-        return {"status": "started", "childSessionId": "child-1", "requestId": payload["requestId"]}
+        return {"sessionId": "child-1", "worktreePath": "/repos/demo-worktree"}
 
 
 def setup_project(tmp_path, status="streaming"):
@@ -82,6 +82,20 @@ def test_ambiguous_choice_does_not_execute(tmp_path):
 
     with pytest.raises(PolicyError, match="does not explicitly authorize"):
         service.resolve_task(pending["decision_id"], "parallel", hermes_session_id="hermes-1")
+    assert dashboard.sent == []
+
+
+def test_explicit_later_parallel_choice_starts_worker(tmp_path):
+    store, dashboard, service, _project = setup_project(tmp_path)
+    pending = service.submit_task(
+        "repo", "new task", route="telegram:42", hermes_session_id="hermes-1"
+    )
+    store.capture_turn("hermes-1", "telegram:42", "Parallel")
+
+    result = service.resolve_task(pending["decision_id"], "parallel", hermes_session_id="hermes-1")
+
+    assert result["status"] == "running"
+    assert result["task"]["worker_session_id"] == "child-1"
     assert dashboard.sent == []
 
 
