@@ -7,6 +7,7 @@ provides_tools:
   - pi_project_status
   - pi_task_submit
   - pi_task_resolve
+  - pi_parallel_resolve
   - pi_task_abort
   - pi_worker_send
   - pi_recent_activity

@@ -16,6 +16,7 @@ The installer enables the plugin and `plugins.entries.pi-orchestrator.allow_gate
 - `pi_project_register` — canonicalize a Server C repository and bind one existing session.
 - `pi_task_submit` — submit serial work or create a side-effect-free busy decision.
 - `pi_task_resolve` — execute Queue, Steer, or Parallel only after explicit later-turn evidence.
+- `pi_parallel_resolve` — on a dirty primary tree, require another later choice between waiting and committed `HEAD`.
 - `pi_task_abort`, `pi_worker_send` — known-worker controls.
 - `pi_recent_activity`, `pi_diagnostics` — bounded observability.
 

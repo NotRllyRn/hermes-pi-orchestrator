@@ -43,6 +43,15 @@ TOOLS = {
         },
         ("decision_id", "choice"),
     ),
+    "pi_parallel_resolve": schema(
+        "pi_parallel_resolve",
+        "Resolve a dirty-tree Parallel preflight only after a later user turn chooses Wait or Committed HEAD.",
+        {
+            "task_id": {"type": "string"},
+            "choice": {"type": "string", "enum": ["wait", "head"]},
+        },
+        ("task_id", "choice"),
+    ),
     "pi_task_abort": schema(
         "pi_task_abort", "Abort the current run of a known Dashboard worker without deleting its Pi session.",
         {"worker_id": SESSION_ID}, ("worker_id",),

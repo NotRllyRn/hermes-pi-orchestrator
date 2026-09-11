@@ -16,9 +16,14 @@ class Dashboard:
         self.sessions = {}
         self.sent = []
         self.spawned = []
+        self.parallel = []
+        self.dirty = False
 
     def inspect_project(self, _path):
-        return {"serverId": "server-c", "repoRoot": "/work/repo", "sessions": list(self.sessions.values())}
+        return {
+            "serverId": "server-c", "repoRoot": "/work/repo", "dirty": self.dirty,
+            "sessions": list(self.sessions.values()),
+        }
 
     def send_prompt(self, session_id, text, delivery=None):
         self.sent.append((session_id, text, delivery))
@@ -34,6 +39,7 @@ class Dashboard:
         return {"session": session_id, "kind": kind, "limit": limit}
 
     def parallel_spawn(self, payload):
+        self.parallel.append(payload)
         return {"sessionId": "child-1", "worktreePath": "/repos/demo-worktree"}
 
 
@@ -97,6 +103,34 @@ def test_explicit_later_parallel_choice_starts_worker(tmp_path):
     assert result["status"] == "running"
     assert result["task"]["worker_session_id"] == "child-1"
     assert dashboard.sent == []
+
+
+def test_dirty_parallel_requires_a_second_later_choice(tmp_path):
+    store, dashboard, service, _project = setup_project(tmp_path)
+    dashboard.dirty = True
+    store.capture_turn("hermes-1", "telegram:42", "new task")
+    pending = service.submit_task(
+        "repo", "new task", route="telegram:42", hermes_session_id="hermes-1"
+    )
+    store.capture_turn("hermes-1", "telegram:42", "Parallel")
+
+    preflight = service.resolve_task(
+        pending["decision_id"], "parallel", hermes_session_id="hermes-1"
+    )
+
+    assert preflight["status"] == "parallel_decision_required"
+    assert preflight["side_effects"] is False
+    assert dashboard.parallel == []
+    with pytest.raises(PolicyError, match="later user turn"):
+        service.resolve_parallel_preflight(
+            pending["task_id"], "head", hermes_session_id="hermes-1"
+        )
+    store.capture_turn("hermes-1", "telegram:42", "Committed HEAD")
+    result = service.resolve_parallel_preflight(
+        pending["task_id"], "head", hermes_session_id="hermes-1"
+    )
+    assert result["status"] == "running"
+    assert dashboard.parallel[0]["dirtyPolicy"] == "head"
 
 
 def test_idle_primary_receives_fresh_prompt(tmp_path):

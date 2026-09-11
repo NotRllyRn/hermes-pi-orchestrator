@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from .choice_parser import parse_choice
+from .choice_parser import parse_choice, parse_dirty_choice
 from .dashboard.client import DashboardClient
 from .reducer import SIGNIFICANT_EVENTS, compact_project, event_summary, worker_state
 from .store import Store, now_ms
@@ -109,7 +109,12 @@ class Orchestrator:
             if not isinstance(evidence_id, int) or not isinstance(project_version, int):
                 raise PolicyError("Stored policy state is invalid")
             decision = self.store.create_decision(
-                task, project_version, evidence_id, self.decision_ttl_seconds
+                task,
+                project_version,
+                evidence_id,
+                hermes_session_id,
+                route or str(evidence.get("session_key") if evidence else ""),
+                self.decision_ttl_seconds,
             )
             return {
                 "status": "decision_required",
@@ -139,12 +144,16 @@ class Orchestrator:
             raise PolicyError("Decision is missing or no longer pending")
         if decision["expires_at"] < now_ms():
             raise PolicyError("Decision expired; submit the task again")
+        if decision.get("producing_session_id") != hermes_session_id:
+            raise PolicyError("Only the Hermes session that received the decision may resolve it")
         project = self._project(decision["project_id"])
         if project["state_version"] != decision["project_version"]:
             raise PolicyError("Project state changed after the decision was created")
         evidence = self.store.latest_evidence(hermes_session_id)
         if not evidence or evidence["evidence_id"] <= decision["created_evidence_id"]:
             raise PolicyError("Queue/Steer/Parallel requires a later user turn")
+        if evidence.get("session_key") != decision.get("route_session_key"):
+            raise PolicyError("Decision must be resolved from its originating gateway thread")
         parsed = parse_choice(str(evidence["user_message"]))
         normalized = choice.lower().strip()
         if parsed != normalized:
@@ -173,14 +182,29 @@ class Orchestrator:
             status = "running"
             result = {"worker_session_id": session_id}
         elif normalized == "parallel":
-            payload = {
-                "projectId": project["project_id"],
-                "taskId": task["task_id"],
-                "repoRoot": project["repo_path"],
-                "primarySessionFile": project["primary_session_file"],
-                "prompt": task["task"],
-            }
-            result = self.dashboard.parallel_spawn(payload)
+            inspection = self.dashboard.inspect_project(project["repo_path"])
+            if inspection.get("dirty"):
+                evidence = self.store.latest_evidence(hermes_session_id)
+                if not evidence:
+                    raise PolicyError("Parallel authorization evidence disappeared")
+                self.store.resolve_decision(decision["decision_id"], normalized)
+                preflight = self.store.create_parallel_preflight(
+                    task,
+                    project["state_version"],
+                    evidence["evidence_id"],
+                    hermes_session_id,
+                    str(evidence["session_key"]),
+                    self.decision_ttl_seconds,
+                )
+                return {
+                    "status": "parallel_decision_required",
+                    "task_id": task["task_id"],
+                    "preflight_id": preflight["task_id"],
+                    "choices": ["Wait", "Committed HEAD"],
+                    "side_effects": False,
+                    "message": "The primary tree is dirty. Ask the user to choose Wait or Committed HEAD on a later turn.",
+                }
+            result = self._start_parallel(project, task, "reject")
             status = "running"
         else:
             raise PolicyError("Choice must be queue, steer, or parallel")
@@ -190,6 +214,63 @@ class Orchestrator:
             worker_session_id=result.get("sessionId") or result.get("worker_session_id"),
         )
         return {"status": status, "task": updated, "dashboard": result}
+
+    def validate_parallel_preflight(
+        self, task_id: str, choice: str, *, hermes_session_id: str
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], str]:
+        preflight = self.store.get_parallel_preflight(task_id)
+        if not preflight or preflight["status"] != "pending":
+            raise PolicyError("Parallel preflight is missing or no longer pending")
+        if preflight["expires_at"] < now_ms():
+            raise PolicyError("Parallel preflight expired; submit the task again")
+        if preflight["producing_session_id"] != hermes_session_id:
+            raise PolicyError("Only the originating Hermes session may resolve this preflight")
+        project = self._project(preflight["project_id"])
+        if project["state_version"] != preflight["project_version"]:
+            raise PolicyError("Project state changed after the parallel preflight")
+        evidence = self.store.latest_evidence(hermes_session_id)
+        if not evidence or evidence["evidence_id"] <= preflight["created_evidence_id"]:
+            raise PolicyError("Wait/Committed HEAD requires a later user turn")
+        if evidence["session_key"] != preflight["route_session_key"]:
+            raise PolicyError("Parallel preflight must be resolved from its originating gateway thread")
+        normalized = parse_dirty_choice(str(evidence["user_message"]))
+        if normalized not in {"wait", "head"} or normalized != choice.lower().strip():
+            raise PolicyError("Latest raw user message does not explicitly authorize this preflight choice")
+        task = self.store.get_task(task_id)
+        if not task:
+            raise PolicyError("Parallel task is missing")
+        return preflight, project, task, normalized
+
+    def resolve_parallel_preflight(
+        self, task_id: str, choice: str, *, hermes_session_id: str
+    ) -> dict[str, Any]:
+        _preflight, project, task, normalized = self.validate_parallel_preflight(
+            task_id, choice, hermes_session_id=hermes_session_id
+        )
+        self.store.resolve_parallel_preflight(task_id, normalized)
+        if normalized == "wait":
+            updated = self.store.update_task(task_id, status="waiting")
+            return {"status": "waiting", "task": updated, "side_effects": False}
+        result = self._start_parallel(project, task, "head")
+        updated = self.store.update_task(
+            task_id, status="running", worker_session_id=result.get("sessionId")
+        )
+        return {"status": "running", "task": updated, "dashboard": result}
+
+    def _start_parallel(
+        self, project: dict[str, Any], task: dict[str, Any], dirty_policy: str
+    ) -> dict[str, Any]:
+        session_file = project.get("primary_session_file")
+        if not session_file:
+            raise PolicyError("Project primary has no durable Pi session file")
+        return self.dashboard.parallel_spawn({
+            "projectId": project["project_id"],
+            "taskId": task["task_id"],
+            "repoRoot": project["repo_path"],
+            "primarySessionFile": session_file,
+            "prompt": task["task"],
+            "dirtyPolicy": dirty_policy,
+        })
 
     def worker_send(self, session_id: str, message: str, delivery: str | None) -> dict[str, Any]:
         if session_id not in self.dashboard.sessions:

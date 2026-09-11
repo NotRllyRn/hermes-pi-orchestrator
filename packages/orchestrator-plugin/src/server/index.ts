@@ -28,6 +28,7 @@ interface ParallelRequest {
   primarySessionFile: string;
   prompt: string;
   baseBranch?: string;
+  dirtyPolicy?: "reject" | "head";
 }
 
 interface ParallelResult {
@@ -136,6 +137,13 @@ function prepareParallelWorktree(
   mkdirSync(requestedRoot, { recursive: true });
   const worktreeRoot = realpathSync(requestedRoot);
   if (!inside(root, worktreeRoot)) throw new Error("canonical worktreeRoot escapes configured allowedRoots");
+  const dirty = execFileSync("git", ["-C", repoRoot, "status", "--porcelain"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  }).trim();
+  if (dirty && request.dirtyPolicy !== "head") {
+    throw new Error("primary working tree is dirty; choose wait or committed HEAD explicitly");
+  }
   const suffix = request.taskId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "task";
   const slug = request.prompt.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "work";
   const branch = `hermes/${slug}-${suffix}`;
@@ -211,7 +219,11 @@ export function register(ctx: ServerPluginContext): void {
           encoding: "utf8",
           timeout: 10_000,
         }).trim();
-        return { serverId: hostname(), repoRoot, branch, head, sessions };
+        const dirty = execFileSync("git", ["-C", repoRoot, "status", "--porcelain"], {
+          encoding: "utf8",
+          timeout: 10_000,
+        }).trim().length > 0;
+        return { serverId: hostname(), repoRoot, branch, head, dirty, sessions };
       } catch (error) {
         ctx.logger.warn("Project inspection rejected", error);
         return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });

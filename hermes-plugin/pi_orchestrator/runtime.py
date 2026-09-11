@@ -97,6 +97,12 @@ def register_plugin(ctx: Any) -> None:
             args["decision_id"], args["choice"], hermes_session_id=hermes_session_id
         ))
 
+    def pi_parallel_resolve(args: dict[str, Any], **kwargs: Any) -> str:
+        _, hermes_session_id = route(kwargs)
+        return _json(service.resolve_parallel_preflight(
+            args["task_id"], args["choice"], hermes_session_id=hermes_session_id
+        ))
+
     def pi_task_abort(args: dict[str, Any], **_kwargs: Any) -> str:
         return _json(service.abort(args["worker_id"]))
 
@@ -117,6 +123,7 @@ def register_plugin(ctx: Any) -> None:
         "pi_project_status": pi_project_status,
         "pi_task_submit": pi_task_submit,
         "pi_task_resolve": pi_task_resolve,
+        "pi_parallel_resolve": pi_parallel_resolve,
         "pi_task_abort": pi_task_abort,
         "pi_worker_send": pi_worker_send,
         "pi_recent_activity": pi_recent_activity,
@@ -150,16 +157,24 @@ def register_plugin(ctx: Any) -> None:
         store.capture_turn(hermes_session_id, _session_key(kwargs), user_message)
 
     def pre_tool_call(**kwargs: Any) -> dict[str, str] | None:
-        if kwargs.get("tool_name") != "pi_task_resolve":
+        tool_name = kwargs.get("tool_name")
+        if tool_name not in {"pi_task_resolve", "pi_parallel_resolve"}:
             return None
         args = kwargs.get("args")
         if not isinstance(args, dict):
-            return {"action": "block", "message": "Invalid pi_task_resolve arguments"}
+            return {"action": "block", "message": f"Invalid {tool_name} arguments"}
         try:
-            service.validate_resolution(
-                str(args.get("decision_id") or ""), str(args.get("choice") or ""),
-                hermes_session_id=str(kwargs.get("session_id") or _session_key(kwargs)),
-            )
+            hermes_session_id = str(kwargs.get("session_id") or _session_key(kwargs))
+            if tool_name == "pi_task_resolve":
+                service.validate_resolution(
+                    str(args.get("decision_id") or ""), str(args.get("choice") or ""),
+                    hermes_session_id=hermes_session_id,
+                )
+            else:
+                service.validate_parallel_preflight(
+                    str(args.get("task_id") or ""), str(args.get("choice") or ""),
+                    hermes_session_id=hermes_session_id,
+                )
         except PolicyError as exc:
             return {"action": "block", "message": str(exc)}
         return None

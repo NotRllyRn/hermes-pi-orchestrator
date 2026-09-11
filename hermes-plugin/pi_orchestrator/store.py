@@ -56,6 +56,20 @@ CREATE TABLE IF NOT EXISTS decisions (
   project_id TEXT NOT NULL REFERENCES projects(project_id),
   project_version INTEGER NOT NULL,
   created_evidence_id INTEGER NOT NULL,
+  producing_session_id TEXT NOT NULL DEFAULT '',
+  route_session_key TEXT NOT NULL DEFAULT '',
+  expires_at INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  choice TEXT,
+  resolved_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS parallel_preflights (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(task_id),
+  project_id TEXT NOT NULL REFERENCES projects(project_id),
+  project_version INTEGER NOT NULL,
+  created_evidence_id INTEGER NOT NULL,
+  producing_session_id TEXT NOT NULL DEFAULT '',
+  route_session_key TEXT NOT NULL DEFAULT '',
   expires_at INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   choice TEXT,
@@ -110,6 +124,21 @@ class Store:
         self._db.row_factory = sqlite3.Row
         with self._db:
             self._db.executescript(_SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        """Apply additive migrations for databases created by earlier plugin builds."""
+        decision_columns = {
+            row["name"] for row in self._db.execute("PRAGMA table_info(decisions)").fetchall()
+        }
+        if "producing_session_id" not in decision_columns:
+            self._db.execute(
+                "ALTER TABLE decisions ADD COLUMN producing_session_id TEXT NOT NULL DEFAULT ''"
+            )
+        if "route_session_key" not in decision_columns:
+            self._db.execute(
+                "ALTER TABLE decisions ADD COLUMN route_session_key TEXT NOT NULL DEFAULT ''"
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -248,17 +277,25 @@ class Store:
         return [dict(row) for row in rows]
 
     def create_decision(
-        self, task: dict[str, Any], project_version: int, evidence_id: int, ttl_seconds: int = 900
+        self,
+        task: dict[str, Any],
+        project_version: int,
+        evidence_id: int,
+        producing_session_id: str,
+        route_session_key: str,
+        ttl_seconds: int = 900,
     ) -> dict[str, Any]:
         decision_id = new_id("decision")
         with self._lock, self._db:
             self._db.execute(
                 """INSERT INTO decisions
-                   (decision_id,task_id,project_id,project_version,created_evidence_id,expires_at,status)
-                   VALUES(?,?,?,?,?,?, 'pending')""",
+                   (decision_id,task_id,project_id,project_version,created_evidence_id,
+                    producing_session_id,route_session_key,expires_at,status)
+                   VALUES(?,?,?,?,?,?,?,?, 'pending')""",
                 (
                     decision_id, task["task_id"], task["project_id"], project_version,
-                    evidence_id, now_ms() + ttl_seconds * 1000,
+                    evidence_id, producing_session_id, route_session_key,
+                    now_ms() + ttl_seconds * 1000,
                 ),
             )
             self._db.execute(
@@ -280,6 +317,48 @@ class Store:
                 (choice, now_ms(), decision_id),
             )
         return self.get_decision(decision_id) or {}
+
+    def create_parallel_preflight(
+        self,
+        task: dict[str, Any],
+        project_version: int,
+        evidence_id: int,
+        producing_session_id: str,
+        route_session_key: str,
+        ttl_seconds: int = 900,
+    ) -> dict[str, Any]:
+        with self._lock, self._db:
+            self._db.execute(
+                """INSERT OR REPLACE INTO parallel_preflights
+                   (task_id,project_id,project_version,created_evidence_id,
+                    producing_session_id,route_session_key,expires_at,status)
+                   VALUES(?,?,?,?,?,?,?,'pending')""",
+                (
+                    task["task_id"], task["project_id"], project_version, evidence_id,
+                    producing_session_id, route_session_key, now_ms() + ttl_seconds * 1000,
+                ),
+            )
+            self._db.execute(
+                "UPDATE tasks SET status='parallel_decision_required',updated_at=? WHERE task_id=?",
+                (now_ms(), task["task_id"]),
+            )
+        return self.get_parallel_preflight(task["task_id"]) or {}
+
+    def get_parallel_preflight(self, task_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM parallel_preflights WHERE task_id=?", (task_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def resolve_parallel_preflight(self, task_id: str, choice: str) -> dict[str, Any]:
+        with self._lock, self._db:
+            self._db.execute(
+                """UPDATE parallel_preflights SET status='resolved',choice=?,resolved_at=?
+                   WHERE task_id=? AND status='pending'""",
+                (choice, now_ms(), task_id),
+            )
+        return self.get_parallel_preflight(task_id) or {}
 
     def save_cursor(self, session_id: str, seq: int, dashboard_instance: str = "") -> None:
         with self._lock, self._db:
