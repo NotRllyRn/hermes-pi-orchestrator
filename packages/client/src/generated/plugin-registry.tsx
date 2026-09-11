@@ -8,6 +8,7 @@ import { SessionFlowActionsClaim, shouldRenderFlowsSubcard, FlowDashboardClaim, 
 import { GoalChip, hasGoal, GoalControl, FolderGoalsSection, GoalsBoardClaim, GoalDetailClaim, GoalPluginSettings, catalog as goal_catalog } from "@blackbelt-technology/pi-dashboard-goal-plugin";
 import { GrammarSettings, GrammarComposerPanel, catalog as grammar_catalog } from "@blackbelt-technology/pi-dashboard-grammar-plugin";
 import { HermesMemorySettings, catalog as hermes_memory_catalog } from "@blackbelt-technology/pi-dashboard-hermes-memory-plugin";
+import { OrchestratorPanel } from "@notrllyrn/pi-dashboard-orchestrator-plugin";
 import { FolderKbSection, KbSettingsClaim, catalog as kb_catalog } from "@blackbelt-technology/pi-dashboard-kb-plugin";
 import { BuiltInRolesSettings, catalog as roles_catalog } from "@blackbelt-technology/pi-dashboard-roles-plugin";
 import { SubagentsSettings, SubagentPopoutClaim, catalog as subagents_catalog } from "@blackbelt-technology/pi-dashboard-subagents-plugin";
@@ -334,6 +335,26 @@ export const PLUGIN_REGISTRY: RegistryEntry[] = [
   },
   {
     manifest: {
+        "id": "hermes-pi-orchestrator",
+        "displayName": "Hermes Pi Orchestrator",
+        "priority": 100,
+        "claims": [
+            {
+                "slot": "settings-section",
+                "component": "OrchestratorPanel",
+                "tab": "general"
+            }
+        ],
+        "client": "./src/client/index.tsx",
+        "server": "./src/server/index.ts",
+        "configSchema": "./src/configSchema.json"
+    },
+    claims: [
+      { pluginId: "hermes-pi-orchestrator", priority: 100, slot: "settings-section", tab: "general", Component: OrchestratorPanel },
+    ],
+  },
+  {
+    manifest: {
         "id": "kb",
         "displayName": "Knowledge Base",
         "priority": 100,
@@ -473,4 +494,4 @@ export const PLUGIN_REGISTRY: RegistryEntry[] = [
   },
 ];
 
-export const PLUGIN_REGISTRY_HASH = "59d19bdd86d8795a0112914867cea8ae37f21953619cfac3a741925e331dbef5";
+export const PLUGIN_REGISTRY_HASH = "f0b60e78d2343ada3ef70ba8dcaebfcae342e14a3a8fcedd69e50758c30087b1";

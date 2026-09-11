@@ -1,0 +1,54 @@
+{
+  "name": "@notrllyrn/pi-dashboard-orchestrator-plugin",
+  "version": "0.1.0",
+  "description": "Hermes Pi Orchestrator monitor and control panel for pi-dashboard",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/client/index.tsx",
+      "default": "./src/client/index.tsx"
+    },
+    "./client": {
+      "types": "./src/client/index.tsx",
+      "default": "./src/client/index.tsx"
+    },
+    "./server": {
+      "types": "./src/server/index.ts",
+      "default": "./src/server/index.ts"
+    }
+  },
+  "pi-dashboard-plugin": {
+    "id": "hermes-pi-orchestrator",
+    "displayName": "Hermes Pi Orchestrator",
+    "priority": 100,
+    "client": "./src/client/index.tsx",
+    "server": "./src/server/index.ts",
+    "configSchema": "./src/configSchema.json",
+    "claims": [
+      {
+        "slot": "settings-section",
+        "component": "OrchestratorPanel",
+        "tab": "general"
+      }
+    ]
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "dependencies": {
+    "@blackbelt-technology/dashboard-plugin-runtime": "^0.8.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "scripts": {
+    "test": "HOME=$(mktemp -d -t pi-orchestrator-test-XXXXXX) vitest run",
+    "lint": "tsc --noEmit"
+  }
+}
