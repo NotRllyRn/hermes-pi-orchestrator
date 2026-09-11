@@ -1,0 +1,14 @@
+name: pi-orchestrator
+version: "0.1.0"
+description: Persistent Hermes-to-Pi coding task orchestration
+provides_tools:
+  - pi_start
+  - pi_send
+  - pi_status
+  - pi_stop
+  - pi_queue
+  - pi_queue_status
+provides_hooks:
+  - pre_llm_call
+  - post_llm_call
+  - on_session_end

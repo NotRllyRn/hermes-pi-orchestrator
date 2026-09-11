@@ -57,3 +57,5 @@ SHIP_IT_BLOCKED.md
 # .pytest_cache/.gitignore, which `kb dox lint` does not honour — so it showed
 # up as a missing-row finding. Ignore it from the root instead.
 .pytest_cache/
+__pycache__/
+*.pyc
