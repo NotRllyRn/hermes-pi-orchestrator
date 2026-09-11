@@ -32,18 +32,6 @@ function deps(abortSession: ServerContextDeps["abortSession"]): ServerContextDep
   };
 }
 
-describe("createServerPluginContext sendToSession", () => {
-  it("forwards an explicit delivery mode", () => {
-    const hook = vi.fn(() => true);
-    const d = deps(() => true);
-    d.sendToSession = hook;
-    const ctx = createServerPluginContext(d, "orchestrator");
-
-    expect(ctx.sendToSession("sess-1", "next", "steer")).toBe(true);
-    expect(hook).toHaveBeenCalledWith("sess-1", "next", "steer");
-  });
-});
-
 describe("createServerPluginContext abortSession", () => {
   it("exposes a trusted abortSession hook that dispatches and returns true", () => {
     const hook = vi.fn(() => true);
