@@ -76,7 +76,11 @@ export type OnSessionEndedFn = (handler: (sessionId: string) => void) => () => v
  * for headless sessions). Returns false when the session is not connected.
  * See change: add-goal-continuation-plugin.
  */
-export type SendToSessionFn = (sessionId: string, text: string) => boolean;
+export type SendToSessionFn = (
+  sessionId: string,
+  text: string,
+  delivery?: "steer" | "followUp",
+) => boolean;
 
 /**
  * Emit a configured pi event INTO a running session's in-process event bus

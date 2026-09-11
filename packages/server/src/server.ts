@@ -2177,8 +2177,10 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
                 pluginSessionEndSubs.add(handler);
                 return () => pluginSessionEndSubs.delete(handler);
               },
-              sendToSession: (sessionId, text) =>
-                piGateway.sendToSession(sessionId, { type: "send_prompt", sessionId, text }),
+              sendToSession: (sessionId, text, delivery) =>
+                piGateway.sendToSession(sessionId, {
+                  type: "send_prompt", sessionId, text, delivery,
+                }),
               // Session-spawn hook. Gated to first-party/trusted plugins
               // (priority <= 100 by convention). Untrusted plugins get a
               // hook that always rejects. See change: add-automation-plugin.
