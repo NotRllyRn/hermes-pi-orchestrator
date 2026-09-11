@@ -3,7 +3,7 @@
 Files in this directory. One row per file. Topic docs + repo-root config (root config files have no directory owner; catalogued here). Supersedes deleted `docs/file-index*.md` splits. See change: migrate-file-index-to-agents-tree.
 
 | File | Purpose |
-|------|---------|
+| ------ | --------- |
 | `FLOWS_HANDOFF_CHECKLIST.md` | (repo root) LLM handoff checklist. Verifies pi-flows + Anthropic-messages bridge + model resolution… → see `FLOWS_HANDOFF_CHECKLIST.md.AGENTS.md` |
 | `HANDOFF-grammar-writing.md` | (repo root) Session handoff note. Composer grammar/writing checker. Backends: `languagetool` (offline Java server, ~25 ms, no style/rewrite) vs `llm` (pi-ai `streamSimple`, + writing improvement, ~2–15 s). Config `config.grammar` (`backend`, `llm.{provider,model}`, `maxChars`, `debounceMs`). NEXT: review Java-server writing backend. |
 | `architecture-notes/worker-offload-roadmap.md` | Worker offload roadmap. Main-loop CPU + sync-fs work → worker_threads. → see `architecture-notes/worker-offload-roadmap.md.AGENTS.md` |
