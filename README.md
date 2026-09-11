@@ -1,12 +1,14 @@
-# PI Dashboard
+# Hermes Pi Orchestrator
+
+Persistent orchestration between [Hermes Agent](https://github.com/NousResearch/hermes-agent), the [Pi coding agent](https://github.com/badlogic/pi-mono), and PI Dashboard. Hermes delegates coding work to resumable Pi RPC sessions, receives asynchronous completion messages, and manages a durable global task queue. The browser panel monitors and controls the same sessions across a three-server deployment.
 
 <p align="center">
-  <a href="https://github.com/BlackBeltTechnology/pi-agent-dashboard">
+  <a href="https://github.com/NotRllyRn/hermes-pi-orchestrator">
     <img src="docs/cover.png" alt="PI Dashboard — command an army of pi agents from one tab" />
   </a>
 </p>
 
-[![CI](https://github.com/BlackBeltTechnology/pi-agent-dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/BlackBeltTechnology/pi-agent-dashboard/actions/workflows/ci.yml)
+[![CI](https://github.com/NotRllyRn/hermes-pi-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/NotRllyRn/hermes-pi-orchestrator/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@blackbelt-technology/pi-agent-dashboard)](https://www.npmjs.com/package/@blackbelt-technology/pi-agent-dashboard)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Discord](https://img.shields.io/badge/Discord-join%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/DrNebZ3pF5)
@@ -19,7 +21,27 @@
 
 > **Note:** This dashboard only works with [pi](https://github.com/badlogic/pi-mono). Oh My Pi is **not** supported.
 
+## Orchestrator quickstart
+
+On Server A, clone this repository and install the Hermes plugin:
+
+```bash
+git clone git@github.com:NotRllyRn/hermes-pi-orchestrator.git
+cd hermes-pi-orchestrator
+scripts/install-hermes-plugin.sh
+```
+
+Configure Pi SSH transport and the control API from [`deploy/hermes.env.example`](deploy/hermes.env.example). On Server B, build this fork and configure [`deploy/dashboard.env.example`](deploy/dashboard.env.example). Server C needs Pi, model authentication, project checkouts, and key-authenticated SSH access from Server A.
+
+Full commands, service environment files, security boundaries, and smoke tests: **[`deploy/README.md`](deploy/README.md)**.
+
+Hermes exposes `pi_start`, `pi_send`, `pi_status`, `pi_stop`, `pi_queue`, and `pi_queue_status`. Dashboard controls appear under **Settings → General → Hermes Pi Orchestrator**.
+
 ---
+
+## Included PI Dashboard
+
+The remainder of this README documents the upstream PI Dashboard included by this fork.
 
 ## Screenshots
 
@@ -35,6 +57,7 @@
 
 ## Table of contents
 
+- [Orchestrator quickstart](#orchestrator-quickstart)
 - [Quickstart](#quickstart)
 - [Features](#features)
 - [Chinese UI](#chinese-ui)

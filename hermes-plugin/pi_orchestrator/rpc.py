@@ -61,7 +61,10 @@ def build_pi_command(
         f"cd {shlex.quote(cwd)} && mkdir -p {rendered_dir} && "
         f"exec {' '.join(rendered)}"
     )
-    return ["ssh", "-T", host, "--", "sh", "-lc", remote]
+    return [
+        "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+        host, "--", "sh", "-lc", remote,
+    ]
 
 
 class RpcProcess:

@@ -28,10 +28,13 @@ def test_builds_quoted_ssh_command():
     command = build_pi_command(
         "~/.hermes/pi sessions/s.jsonl", cwd="/work/tree with space", host="pi@server-c"
     )
-    assert command[:6] == ["ssh", "-T", "pi@server-c", "--", "sh", "-lc"]
-    assert "cd '/work/tree with space'" in command[6]
-    assert '"$HOME"/' in command[6]
-    assert "mkdir -p" in command[6]
+    assert command[:8] == [
+        "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "pi@server-c", "--"
+    ]
+    assert command[8:10] == ["sh", "-lc"]
+    assert "cd '/work/tree with space'" in command[10]
+    assert '"$HOME"/' in command[10]
+    assert "mkdir -p" in command[10]
 
 
 def test_manager_runs_and_persists_rpc_session(tmp_path, monkeypatch):
