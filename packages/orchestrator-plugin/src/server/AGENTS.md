@@ -2,4 +2,4 @@
 
 | File | Purpose |
 | ------ | --------- |
-| `index.ts` | Server C project canonicalization and bounded redacted Dashboard-event diagnostics routes. |
+| `index.ts` | Server C project canonicalization, bounded diagnostics, and atomic worktree + Pi-history-fork transaction routes. |

@@ -25,6 +25,7 @@ interface ParallelRequest {
   projectId: string;
   taskId: string;
   repoRoot: string;
+  primarySessionFile: string;
   prompt: string;
   baseBranch?: string;
 }
@@ -98,7 +99,17 @@ export async function createParallelWorker(
   let committed = false;
 
   try {
-    const spawned = await ctx.spawnSession({ cwd: prepared.worktreePath, mode: "local", sandbox: "workspace-write" });
+    const source = (ctx.sessionManager.listAll() as SessionView[]).find(
+      (session) => session.sessionFile === request.primarySessionFile,
+    );
+    if (!source) throw new Error("primary Pi session file is not known to Dashboard");
+    const spawned = await ctx.spawnSession({
+      cwd: prepared.worktreePath,
+      sessionFile: request.primarySessionFile,
+      sessionMode: "fork",
+      mode: "local",
+      sandbox: "workspace-write",
+    });
     if (!spawned.success || !spawned.spawnToken) throw new Error(spawned.message ?? "Dashboard rejected worker spawn");
     spawnToken = spawned.spawnToken;
     const session = await waitForSession(ctx, prepared.worktreePath);
@@ -214,8 +225,10 @@ export function register(ctx: ServerPluginContext): void {
     "/api/hermes-orchestrator/parallel",
     async (request, reply) => {
       const body = request.body;
-      if (!body?.projectId || !body.taskId || !body.repoRoot || !body.prompt) {
-        return reply.code(400).send({ error: "projectId, taskId, repoRoot, and prompt are required" });
+      if (!body?.projectId || !body.taskId || !body.repoRoot || !body.primarySessionFile || !body.prompt) {
+        return reply.code(400).send({
+          error: "projectId, taskId, repoRoot, primarySessionFile, and prompt are required",
+        });
       }
       const completed = completedTasks.get(body.taskId);
       if (completed) return completed;

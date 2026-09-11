@@ -851,7 +851,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
   // Resolve package version once at startup
   const __require = createRequire(import.meta.url);
   let pkgVersion = "unknown";
-  try { pkgVersion = __require("../package.json").version ?? "unknown"; } catch {}
+  try { pkgVersion = __require("../package.json").version ?? "unknown"; } catch { /* package metadata is optional */ }
   const selfHostname = os.hostname();
 
   // Pending cold-start recovery offer (ask mode). Held so it replays to every
@@ -2206,6 +2206,8 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
                 try {
                   const result = await spawnPiSession(opts.cwd, {
                     strategy: "headless",
+                    ...(opts.sessionFile ? { sessionFile: opts.sessionFile } : {}),
+                    ...(opts.sessionMode ? { mode: opts.sessionMode } : {}),
                     ...(opts.model ? { model: opts.model } : {}),
                     // Flow/automation runs know an intended name — set it at
                     // creation via `--name`. See change: adopt-pi-074-080-features.
@@ -2799,10 +2801,10 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
       terminalGateway.close();
       // Kill all active terminal PTY processes
       for (const t of terminalManager.list()) {
-        try { terminalManager.kill(t.id); } catch {}
+        try { terminalManager.kill(t.id); } catch { /* best-effort terminal cleanup */ }
       }
       // Close any pending OAuth callback servers
-      try { const { closeAllCallbackServers } = await import("./auth/oauth-callback-server.js"); await closeAllCallbackServers(); } catch {}
+      try { const { closeAllCallbackServers } = await import("./auth/oauth-callback-server.js"); await closeAllCallbackServers(); } catch { /* best-effort OAuth cleanup */ }
       // Close second port before main server
       if (secondFastify) {
         try { await secondFastify.close(); } catch { /* ignore */ }

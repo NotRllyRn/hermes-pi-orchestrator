@@ -177,6 +177,7 @@ class Orchestrator:
                 "projectId": project["project_id"],
                 "taskId": task["task_id"],
                 "repoRoot": project["repo_path"],
+                "primarySessionFile": project["primary_session_file"],
                 "prompt": task["task"],
             }
             result = self.dashboard.parallel_spawn(payload)

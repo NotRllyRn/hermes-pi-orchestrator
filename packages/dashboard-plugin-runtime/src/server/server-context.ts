@@ -22,15 +22,15 @@ function createServerLogger(pluginId: string): PluginLogger {
 
 /** Minimal session manager surface exposed to plugins. */
 export interface PluginSessionManager {
-  listActive(): unknown[];
-  listAll(): unknown[];
-  getSession(id: string): unknown;
+  listActive(): object[];
+  listAll(): object[];
+  getSession(id: string): object | undefined;
 }
 
 /** Minimal event store surface exposed to plugins. */
 export interface PluginEventStore {
-  getEvents(sessionId: string): unknown[];
-  getLatestEvent(sessionId: string): unknown;
+  getEvents(sessionId: string): object[];
+  getLatestEvent(sessionId: string): object | undefined;
 }
 
 /** Minimal broadcast function exposed to plugins. */
@@ -104,6 +104,10 @@ export type RegisterBrowserHandlerFn = (type: string, handler: (msg: unknown, ws
 export interface PluginSpawnOptions {
   /** Working directory the new pi session runs in. */
   cwd: string;
+  /** Existing Pi JSONL used for an explicit continue/fork spawn. */
+  sessionFile?: string;
+  /** Session action applied to sessionFile. Omit both fields for a fresh session. */
+  sessionMode?: "continue" | "fork";
   /** Optional model id (resolved provider/model) passed as `--model`. */
   model?: string;
   /**

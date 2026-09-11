@@ -46,7 +46,12 @@ describe("Server C safety helpers", () => {
     let cwd = "";
     const sent: string[] = [];
     const ctx = {
-      sessionManager: { listAll: () => [{ id: "child", cwd, sessionFile: "/sessions/child.jsonl" }] },
+      sessionManager: {
+        listAll: () => [
+          { id: "primary", cwd: repo, sessionFile: "/sessions/primary.jsonl" },
+          { id: "child", cwd, sessionFile: "/sessions/child.jsonl" },
+        ],
+      },
       spawnSession: async (options: { cwd: string }) => {
         cwd = options.cwd;
         return { success: true, spawnToken: "spawn-1" };
@@ -61,7 +66,10 @@ describe("Server C safety helpers", () => {
     const result = await createParallelWorker(
       ctx,
       { allowedRoots: [root] },
-      { projectId: "project-1", taskId: "12345678-rest", repoRoot: repo, prompt: "Build feature" },
+      {
+        projectId: "project-1", taskId: "12345678-rest", repoRoot: repo,
+        primarySessionFile: "/sessions/primary.jsonl", prompt: "Build feature",
+      }
     );
 
     expect(result.sessionId).toBe("child");
@@ -78,7 +86,7 @@ describe("Server C safety helpers", () => {
     git(repo, "config", "user.name", "Test");
     git(repo, "commit", "--allow-empty", "-m", "init");
     const ctx = {
-      sessionManager: { listAll: () => [] },
+      sessionManager: { listAll: () => [{ sessionFile: "/sessions/primary.jsonl" }] },
       spawnSession: async () => ({ success: false, message: "no spawn" }),
       abortSpawnedRun: async () => true,
     } as unknown as Parameters<typeof createParallelWorker>[0];
@@ -86,7 +94,10 @@ describe("Server C safety helpers", () => {
     await expect(createParallelWorker(
       ctx,
       { allowedRoots: [root] },
-      { projectId: "project-1", taskId: "87654321-rest", repoRoot: repo, prompt: "Fail spawn" },
+      {
+        projectId: "project-1", taskId: "87654321-rest", repoRoot: repo,
+        primarySessionFile: "/sessions/primary.jsonl", prompt: "Fail spawn",
+      }
     )).rejects.toThrow("no spawn");
 
     expect(existsSync(path.join(root, ".hermes-worktrees", "fail-spawn-87654321"))).toBe(false);
