@@ -74,7 +74,9 @@ describe("Server C safety helpers", () => {
 
     expect(result.sessionId).toBe("child");
     expect(existsSync(result.worktreePath)).toBe(true);
-    expect(sent).toEqual(["child:Build feature"]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("child:[PARALLEL TASK CONTEXT]");
+    expect(sent[0]).toContain("Task: Build feature");
   });
 
   it("rolls back the worktree when Dashboard spawn fails", async () => {

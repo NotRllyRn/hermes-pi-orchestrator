@@ -16,6 +16,10 @@
     "initCommand": {
       "type": "string",
       "description": "Optional operator-configured shell command run before Pi starts."
+    },
+    "journalPath": {
+      "type": "string",
+      "description": "Optional atomic transaction-journal path on Server C."
     }
   },
   "additionalProperties": false

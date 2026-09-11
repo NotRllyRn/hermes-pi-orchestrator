@@ -1,13 +1,15 @@
 import { mkdirSync, realpathSync } from "node:fs";
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
 import path from "node:path";
 import type { ServerPluginContext } from "@blackbelt-technology/dashboard-plugin-runtime/server";
 import { execFileSync } from "@blackbelt-technology/pi-dashboard-shared/platform/exec.js";
+import { TransactionJournal, type TransactionState } from "./transactions.js";
 
 interface PluginConfig {
   allowedRoots?: string[];
   worktreeRoot?: string;
   initCommand?: string;
+  journalPath?: string;
 }
 
 interface SessionView {
@@ -37,6 +39,7 @@ interface ParallelResult {
   branch: string;
   worktreePath: string;
   spawnToken: string;
+  baseCommit: string;
 }
 
 function inside(root: string, candidate: string): boolean {
@@ -93,17 +96,19 @@ export async function createParallelWorker(
   ctx: ServerPluginContext,
   config: PluginConfig,
   request: ParallelRequest,
+  progress: (state: TransactionState, details: Partial<ParallelResult>) => void = () => {},
 ): Promise<ParallelResult> {
+  const source = (ctx.sessionManager.listAll() as SessionView[]).find(
+    (session) => session.sessionFile === request.primarySessionFile,
+  );
+  if (!source) throw new Error("primary Pi session file is not known to Dashboard");
   const prepared = prepareParallelWorktree(config, request);
+  progress("worktree_created", prepared);
   let spawnToken: string | undefined;
   let sessionId: string | undefined;
   let committed = false;
 
   try {
-    const source = (ctx.sessionManager.listAll() as SessionView[]).find(
-      (session) => session.sessionFile === request.primarySessionFile,
-    );
-    if (!source) throw new Error("primary Pi session file is not known to Dashboard");
     const spawned = await ctx.spawnSession({
       cwd: prepared.worktreePath,
       sessionFile: request.primarySessionFile,
@@ -113,10 +118,13 @@ export async function createParallelWorker(
     });
     if (!spawned.success || !spawned.spawnToken) throw new Error(spawned.message ?? "Dashboard rejected worker spawn");
     spawnToken = spawned.spawnToken;
+    progress("spawned", { ...prepared, spawnToken });
     const session = await waitForSession(ctx, prepared.worktreePath);
     sessionId = session.id ?? session.sessionId;
     if (!sessionId) throw new Error("spawned Dashboard session has no id");
-    if (!ctx.sendToSession(sessionId, request.prompt)) throw new Error("failed to send task to spawned worker");
+    progress("sending", { ...prepared, spawnToken, sessionId, sessionFile: session.sessionFile });
+    const orientation = parallelOrientation(request, prepared);
+    if (!ctx.sendToSession(sessionId, orientation)) throw new Error("failed to send task to spawned worker");
     committed = true;
     return { sessionId, sessionFile: session.sessionFile, ...prepared, spawnToken };
   } finally {
@@ -127,7 +135,7 @@ export async function createParallelWorker(
 function prepareParallelWorktree(
   config: PluginConfig,
   request: ParallelRequest,
-): Pick<ParallelResult, "branch" | "worktreePath"> & { repoRoot: string } {
+): Pick<ParallelResult, "branch" | "worktreePath" | "baseCommit"> & { repoRoot: string } {
   const roots = config.allowedRoots ?? [];
   if (roots.length === 0) throw new Error("plugin allowedRoots is not configured");
   const repoRoot = canonicalRepository(request.repoRoot, roots);
@@ -137,6 +145,10 @@ function prepareParallelWorktree(
   mkdirSync(requestedRoot, { recursive: true });
   const worktreeRoot = realpathSync(requestedRoot);
   if (!inside(root, worktreeRoot)) throw new Error("canonical worktreeRoot escapes configured allowedRoots");
+  const baseCommit = execFileSync("git", ["-C", repoRoot, "rev-parse", request.baseBranch ?? "HEAD"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  }).trim();
   const dirty = execFileSync("git", ["-C", repoRoot, "status", "--porcelain"], {
     encoding: "utf8",
     timeout: 10_000,
@@ -156,7 +168,7 @@ function prepareParallelWorktree(
     if (config.initCommand) {
       execFileSync("sh", ["-lc", config.initCommand], { cwd: worktreePath, encoding: "utf8", timeout: 120_000 });
     }
-    return { repoRoot, branch, worktreePath };
+    return { repoRoot, branch, worktreePath, baseCommit };
   } catch (error) {
     tryGit(repoRoot, ["worktree", "remove", "--force", worktreePath]);
     tryGit(repoRoot, ["branch", "-D", branch]);
@@ -195,9 +207,28 @@ function tryGit(repoRoot: string, args: string[]): void {
   }
 }
 
+function parallelOrientation(
+  request: ParallelRequest,
+  prepared: Pick<ParallelResult, "branch" | "worktreePath" | "baseCommit">,
+): string {
+  return [
+    "[PARALLEL TASK CONTEXT]",
+    `Task: ${request.prompt}`,
+    `Worktree: ${prepared.worktreePath}`,
+    `Branch: ${prepared.branch}`,
+    `Base commit: ${prepared.baseCommit}`,
+    "The primary session may change another worktree concurrently.",
+    "Work only in this branch. Do not merge or modify the primary worktree.",
+    "Leave a clean, reviewable result and report verification.",
+  ].join("\n");
+}
+
 export function register(ctx: ServerPluginContext): void {
   const config = ctx.getPluginConfig<PluginConfig>();
   const configuredRoots = config.allowedRoots ?? [];
+  const journal = new TransactionJournal(
+    config.journalPath ?? path.join(homedir(), ".pi", "dashboard", "hermes-orchestrator-transactions.json"),
+  );
 
   ctx.fastify.get<{ Querystring: { path?: string } }>(
     "/api/hermes-orchestrator/project",
@@ -232,7 +263,6 @@ export function register(ctx: ServerPluginContext): void {
   );
 
   const activeProjects = new Set<string>();
-  const completedTasks = new Map<string, ParallelResult>();
   ctx.fastify.post<{ Body: ParallelRequest }>(
     "/api/hermes-orchestrator/parallel",
     async (request, reply) => {
@@ -242,23 +272,39 @@ export function register(ctx: ServerPluginContext): void {
           error: "projectId, taskId, repoRoot, primarySessionFile, and prompt are required",
         });
       }
-      const completed = completedTasks.get(body.taskId);
-      if (completed) return completed;
+      const existing = journal.get(body.taskId);
+      if (existing?.state === "complete") return existing;
+      if (existing) {
+        return reply.code(409).send({
+          error: "parallel transaction already exists and will not be replayed automatically",
+          transaction: existing,
+        });
+      }
       if (activeProjects.has(body.projectId)) {
         return reply.code(409).send({ error: "parallel creation is already active for this project" });
       }
       activeProjects.add(body.projectId);
+      journal.put({ taskId: body.taskId, projectId: body.projectId, repoRoot: body.repoRoot, state: "preparing" });
       try {
-        const result = await createParallelWorker(ctx, config, body);
-        completedTasks.set(body.taskId, result);
+        const result = await createParallelWorker(ctx, config, body, (state, details) => {
+          journal.update(body.taskId, { state, ...details });
+        });
+        journal.update(body.taskId, { state: "complete", ...result });
         return result;
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        journal.update(body.taskId, { state: "failed", error: message });
         ctx.logger.error("Parallel worker transaction rolled back", error);
-        return reply.code(500).send({ error: error instanceof Error ? error.message : String(error) });
+        return reply.code(500).send({ error: message });
       } finally {
         activeProjects.delete(body.projectId);
       }
     },
+  );
+
+  ctx.fastify.get<{ Params: { taskId: string } }>(
+    "/api/hermes-orchestrator/transaction/:taskId",
+    async (request, reply) => journal.get(request.params.taskId) ?? reply.code(404).send({ error: "not found" }),
   );
 
   ctx.fastify.get<{
