@@ -9,14 +9,17 @@ from dataclasses import asdict
 from importlib import import_module
 from typing import Any
 
-from .queue import QueueWorker
+from .api import ControlApi
 from .rpc import PiManager
-from .schemas import TOOLS
 from .state import QueueTask, StateStore
+
+QueueWorker = import_module(f"{__package__}.queue").QueueWorker
+TOOLS = import_module(f"{__package__}.schemas").TOOLS
 
 _store: StateStore | None = None
 _manager: PiManager | None = None
-_queue: QueueWorker | None = None
+_queue: Any = None
+_api: ControlApi | None = None
 
 
 def _session_key(kwargs: dict[str, Any]) -> str:
@@ -44,7 +47,7 @@ def _available() -> bool:
 
 def register_plugin(ctx) -> None:
     """Register all tools and lifecycle hooks through Hermes' public plugin API."""
-    global _store, _manager, _queue
+    global _store, _manager, _queue, _api
     store = _store = StateStore()
 
     def inject(content: str, session_key: str | None) -> None:
@@ -76,6 +79,8 @@ def register_plugin(ctx) -> None:
         if task.status == "running":
             store.update_task(task.task_id, status="queued", error="Recovered after restart")
     queue_worker.start()
+    api = _api = ControlApi(manager, queue_worker, store)
+    api.start()
 
     def pi_start(args: dict[str, Any], **kwargs: Any) -> str:
         try:
@@ -145,6 +150,7 @@ def register_plugin(ctx) -> None:
         manager.reconcile()
 
     def on_session_end(**_kwargs: Any) -> None:
+        api.stop()
         queue_worker.shutdown()
         manager.stop_all()
 
