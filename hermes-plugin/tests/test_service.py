@@ -17,6 +17,7 @@ class Dashboard:
         self.sent = []
         self.spawned = []
         self.parallel = []
+        self.integrated = []
         self.dirty = False
 
     def inspect_project(self, _path):
@@ -40,7 +41,18 @@ class Dashboard:
 
     def parallel_spawn(self, payload):
         self.parallel.append(payload)
-        return {"sessionId": "child-1", "worktreePath": "/repos/demo-worktree"}
+        return {
+            "sessionId": "child-1", "sessionFile": "/sessions/child.jsonl",
+            "worktreePath": "/repos/demo-worktree", "branch": "hermes/demo",
+            "baseCommit": "abc123",
+        }
+
+    def child_review(self, task_id):
+        return {"data": {"taskId": task_id, "git": {"changedPaths": ["file.py"]}}}
+
+    def child_integrate(self, task_id, strategy):
+        self.integrated.append((task_id, strategy))
+        return {"state": "integrated", "annotationRecorded": True}
 
 
 def setup_project(tmp_path, status="streaming"):
@@ -131,6 +143,29 @@ def test_dirty_parallel_requires_a_second_later_choice(tmp_path):
     )
     assert result["status"] == "running"
     assert dashboard.parallel[0]["dirtyPolicy"] == "head"
+
+
+def test_parallel_settle_waits_for_explicit_review_integration(tmp_path):
+    store, dashboard, service, project = setup_project(tmp_path)
+    task = store.create_task(
+        project["project_id"], "child work", "running", "telegram:42", kind="parallel"
+    )
+    store.update_task(task["task_id"], worker_session_id="child-1")
+
+    service.on_dashboard_message({
+        "type": "dashboard_event", "sessionId": "child-1", "seq": 10,
+        "event": {"eventType": "agent_settled", "data": {"text": "done"}},
+    })
+
+    reviewed = store.get_task(task["task_id"])
+    assert reviewed["status"] == "awaiting_review"
+    assert "file.py" in reviewed["review"]
+    store.capture_turn("hermes-1", "telegram:42", "Merge the child")
+    result = service.integrate_child(
+        task["task_id"], "merge", hermes_session_id="hermes-1"
+    )
+    assert result["status"] == "integrated"
+    assert dashboard.integrated == [(task["task_id"], "merge")]
 
 
 def test_idle_primary_receives_fresh_prompt(tmp_path):

@@ -2,5 +2,6 @@
 
 | File | Purpose |
 | ------ | --------- |
-| `index.ts` | Server C project canonicalization, bounded diagnostics, and atomic worktree + Pi-history-fork transaction routes. |
-| `transactions.ts` | Durable atomic JSON transaction journal for restart-safe idempotency and uncertain-outcome refusal. |
+| `index.ts` | Server C project canonicalization, bounded diagnostics, atomic worker creation, and explicit lifecycle routes. |
+| `lifecycle.ts` | Bounded child review packages plus explicit merge/cherry-pick/retain integration. |
+| `transactions.ts` | Durable atomic JSON transaction journal for restart-safe idempotency and lifecycle recovery. |

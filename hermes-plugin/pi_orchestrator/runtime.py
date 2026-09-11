@@ -103,6 +103,15 @@ def register_plugin(ctx: Any) -> None:
             args["task_id"], args["choice"], hermes_session_id=hermes_session_id
         ))
 
+    def pi_child_review(args: dict[str, Any], **_kwargs: Any) -> str:
+        return _json(service.review_child(args["task_id"]))
+
+    def pi_child_integrate(args: dict[str, Any], **kwargs: Any) -> str:
+        _, hermes_session_id = route(kwargs)
+        return _json(service.integrate_child(
+            args["task_id"], args["strategy"], hermes_session_id=hermes_session_id
+        ))
+
     def pi_task_abort(args: dict[str, Any], **_kwargs: Any) -> str:
         return _json(service.abort(args["worker_id"]))
 
@@ -124,6 +133,8 @@ def register_plugin(ctx: Any) -> None:
         "pi_task_submit": pi_task_submit,
         "pi_task_resolve": pi_task_resolve,
         "pi_parallel_resolve": pi_parallel_resolve,
+        "pi_child_review": pi_child_review,
+        "pi_child_integrate": pi_child_integrate,
         "pi_task_abort": pi_task_abort,
         "pi_worker_send": pi_worker_send,
         "pi_recent_activity": pi_recent_activity,
@@ -158,7 +169,7 @@ def register_plugin(ctx: Any) -> None:
 
     def pre_tool_call(**kwargs: Any) -> dict[str, str] | None:
         tool_name = kwargs.get("tool_name")
-        if tool_name not in {"pi_task_resolve", "pi_parallel_resolve"}:
+        if tool_name not in {"pi_task_resolve", "pi_parallel_resolve", "pi_child_integrate"}:
             return None
         args = kwargs.get("args")
         if not isinstance(args, dict):
@@ -170,9 +181,14 @@ def register_plugin(ctx: Any) -> None:
                     str(args.get("decision_id") or ""), str(args.get("choice") or ""),
                     hermes_session_id=hermes_session_id,
                 )
-            else:
+            elif tool_name == "pi_parallel_resolve":
                 service.validate_parallel_preflight(
                     str(args.get("task_id") or ""), str(args.get("choice") or ""),
+                    hermes_session_id=hermes_session_id,
+                )
+            else:
+                service.validate_integration(
+                    str(args.get("task_id") or ""), str(args.get("strategy") or ""),
                     hermes_session_id=hermes_session_id,
                 )
         except PolicyError as exc:

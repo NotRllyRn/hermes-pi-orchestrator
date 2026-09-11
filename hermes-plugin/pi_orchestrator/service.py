@@ -2,13 +2,33 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
-from typing import Any
+from typing import Any, Protocol
 
-from .choice_parser import parse_choice, parse_dirty_choice
-from .dashboard.client import DashboardClient
+from .choice_parser import parse_choice, parse_dirty_choice, parse_integration
 from .reducer import SIGNIFICANT_EVENTS, compact_project, event_summary, worker_state
 from .store import Store, now_ms
+
+
+def numeric_cost(value: Any) -> float:
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
+
+
+class DashboardPort(Protocol):
+    base_url: str
+    sessions: dict[str, dict[str, Any]]
+    connected: bool
+    last_error: str | None
+
+    def inspect_project(self, repo_path: str) -> dict[str, Any]: ...
+    def send_prompt(self, session_id: str, text: str, delivery: str | None = None) -> None: ...
+    def spawn(self, cwd: str, initial_prompt: str) -> dict[str, Any]: ...
+    def abort(self, session_id: str) -> None: ...
+    def diagnostics(self, session_id: str, kind: str, limit: int) -> Any: ...
+    def parallel_spawn(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+    def child_review(self, task_id: str) -> dict[str, Any]: ...
+    def child_integrate(self, task_id: str, strategy: str) -> dict[str, Any]: ...
 
 
 class PolicyError(RuntimeError):
@@ -16,7 +36,7 @@ class PolicyError(RuntimeError):
 
 
 class Orchestrator:
-    def __init__(self, store: Store, dashboard: DashboardClient, decision_ttl_seconds: int = 900):
+    def __init__(self, store: Store, dashboard: DashboardPort, decision_ttl_seconds: int = 900):
         self.store = store
         self.dashboard = dashboard
         self.decision_ttl_seconds = decision_ttl_seconds
@@ -70,8 +90,26 @@ class Orchestrator:
         project = self._project(reference)
         session = self.dashboard.sessions.get(project.get("primary_session_id", ""))
         activity = self.store.recent_activity(project.get("primary_session_id") or "", 5)
-        counts = Counter(task["status"] for task in self.store.list_tasks(project["project_id"]))
+        tasks = self.store.list_tasks(project["project_id"])
+        counts = Counter(task["status"] for task in tasks)
         result = compact_project(project, session, activity, dict(counts))
+        children = []
+        for task in tasks:
+            if task.get("kind") != "parallel":
+                continue
+            child_session = self.dashboard.sessions.get(task.get("worker_session_id") or "", {})
+            children.append({
+                "task_id": task["task_id"],
+                "status": task["status"],
+                "session_id": task.get("worker_session_id"),
+                "branch": task.get("branch"),
+                "worktree": task.get("worktree_path"),
+                "cost_usd": numeric_cost(child_session.get("cost") or task.get("cost_usd")),
+            })
+        result["parallel_workers"] = children
+        result["project_cost_usd"] = numeric_cost(session.get("cost") if session else 0) + sum(
+            child["cost_usd"] for child in children
+        )
         result["transport"] = {
             "dashboard_connected": self.dashboard.connected,
             "error": self.dashboard.last_error,
@@ -209,10 +247,19 @@ class Orchestrator:
         else:
             raise PolicyError("Choice must be queue, steer, or parallel")
         self.store.resolve_decision(decision["decision_id"], normalized)
-        updated = self.store.update_task(
-            task["task_id"], status=status,
-            worker_session_id=result.get("sessionId") or result.get("worker_session_id"),
-        )
+        changes = {
+            "status": status,
+            "worker_session_id": result.get("sessionId") or result.get("worker_session_id"),
+        }
+        if normalized == "parallel":
+            changes.update({
+                "kind": "parallel",
+                "session_file": result.get("sessionFile"),
+                "branch": result.get("branch"),
+                "worktree_path": result.get("worktreePath"),
+                "base_commit": result.get("baseCommit"),
+            })
+        updated = self.store.update_task(task["task_id"], **changes)
         return {"status": status, "task": updated, "dashboard": result}
 
     def validate_parallel_preflight(
@@ -253,7 +300,14 @@ class Orchestrator:
             return {"status": "waiting", "task": updated, "side_effects": False}
         result = self._start_parallel(project, task, "head")
         updated = self.store.update_task(
-            task_id, status="running", worker_session_id=result.get("sessionId")
+            task_id,
+            status="running",
+            kind="parallel",
+            worker_session_id=result.get("sessionId"),
+            session_file=result.get("sessionFile"),
+            branch=result.get("branch"),
+            worktree_path=result.get("worktreePath"),
+            base_commit=result.get("baseCommit"),
         )
         return {"status": "running", "task": updated, "dashboard": result}
 
@@ -268,9 +322,51 @@ class Orchestrator:
             "taskId": task["task_id"],
             "repoRoot": project["repo_path"],
             "primarySessionFile": session_file,
+            "primarySessionId": project["primary_session_id"],
             "prompt": task["task"],
             "dirtyPolicy": dirty_policy,
         })
+
+    def validate_integration(
+        self, task_id: str, strategy: str, *, hermes_session_id: str
+    ) -> tuple[dict[str, Any], str]:
+        task = self.store.get_task(task_id)
+        if not task or task.get("kind") != "parallel":
+            raise PolicyError("Unknown parallel child task")
+        if task["status"] != "awaiting_review":
+            raise PolicyError("Parallel child must be awaiting review before integration")
+        evidence = self.store.latest_evidence(hermes_session_id)
+        if not evidence or evidence.get("session_key") != task.get("route_session_key"):
+            raise PolicyError("Integration must be requested from the task's gateway thread")
+        normalized = strategy.lower().strip()
+        if parse_integration(str(evidence["user_message"])) != normalized:
+            raise PolicyError("Latest raw user message does not explicitly authorize this integration strategy")
+        return task, normalized
+
+    def review_child(self, task_id: str, *, settled: bool = False) -> dict[str, Any]:
+        task = self.store.get_task(task_id)
+        if not task or task.get("kind") != "parallel":
+            raise PolicyError("Unknown parallel child task")
+        if task["status"] in {"running", "queued"} and not settled:
+            raise PolicyError("Parallel child is still running")
+        if task["status"] not in {"running", "queued", "review_failed", "awaiting_review"}:
+            raise PolicyError("Parallel child is not reviewable")
+        review = self.dashboard.child_review(task_id)
+        updated = self.store.update_task(
+            task_id, status="awaiting_review", review=json.dumps(review), error=None
+        )
+        return {"status": "awaiting_review", "task": updated, "review": review}
+
+    def integrate_child(
+        self, task_id: str, strategy: str, *, hermes_session_id: str
+    ) -> dict[str, Any]:
+        _task, normalized = self.validate_integration(
+            task_id, strategy, hermes_session_id=hermes_session_id
+        )
+        result = self.dashboard.child_integrate(task_id, normalized)
+        status = "retained" if normalized == "leave_branch" else "integrated"
+        updated = self.store.update_task(task_id, status=status, result=json.dumps(result))
+        return {"status": status, "task": updated, "dashboard": result}
 
     def worker_send(self, session_id: str, message: str, delivery: str | None) -> dict[str, Any]:
         if session_id not in self.dashboard.sessions:
@@ -309,8 +405,21 @@ class Orchestrator:
                 self._notify_event(session_id, kind, event_summary(event))
         if kind == "agent_settled":
             for task in self.store.list_tasks():
-                if task.get("worker_session_id") == session_id and task["status"] in {"running", "queued"}:
-                    self.store.update_task(task["task_id"], status="completed", result=event_summary(event))
+                if task.get("worker_session_id") != session_id or task["status"] not in {"running", "queued"}:
+                    continue
+                if task.get("kind") == "parallel":
+                    try:
+                        self.review_child(task["task_id"], settled=True)
+                        self.store.update_task(task["task_id"], result=event_summary(event))
+                    except Exception as exc:
+                        self.store.update_task(
+                            task["task_id"], status="review_failed", error=str(exc),
+                            result=event_summary(event),
+                        )
+                else:
+                    self.store.update_task(
+                        task["task_id"], status="completed", result=event_summary(event)
+                    )
 
     def _bind_started_session(self, message: dict[str, Any]) -> None:
         session = message.get("session")

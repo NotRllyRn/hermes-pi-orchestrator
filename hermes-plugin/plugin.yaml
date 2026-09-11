@@ -8,6 +8,8 @@ provides_tools:
   - pi_task_submit
   - pi_task_resolve
   - pi_parallel_resolve
+  - pi_child_review
+  - pi_child_integrate
   - pi_task_abort
   - pi_worker_send
   - pi_recent_activity

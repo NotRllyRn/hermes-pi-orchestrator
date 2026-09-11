@@ -7,6 +7,9 @@ export type TransactionState =
   | "spawned"
   | "sending"
   | "complete"
+  | "integrating"
+  | "integrated"
+  | "retained"
   | "failed";
 
 export interface TransactionRecord {
@@ -15,12 +18,18 @@ export interface TransactionRecord {
   state: TransactionState;
   updatedAt: string;
   repoRoot?: string;
+  baseBranch?: string;
   branch?: string;
   worktreePath?: string;
   baseCommit?: string;
   sessionId?: string;
   sessionFile?: string;
   spawnToken?: string;
+  primarySessionId?: string;
+  integrationStrategy?: string;
+  integratedCommit?: string;
+  annotationRecorded?: boolean;
+  integrationError?: string;
   error?: string;
 }
 

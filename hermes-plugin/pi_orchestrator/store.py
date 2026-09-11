@@ -42,7 +42,14 @@ CREATE TABLE IF NOT EXISTS tasks (
   project_id TEXT NOT NULL REFERENCES projects(project_id),
   task TEXT NOT NULL,
   status TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'primary',
   worker_session_id TEXT,
+  session_file TEXT,
+  branch TEXT,
+  worktree_path TEXT,
+  base_commit TEXT,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  review TEXT,
   decision_id TEXT,
   route_session_key TEXT,
   result TEXT,
@@ -139,6 +146,23 @@ class Store:
             self._db.execute(
                 "ALTER TABLE decisions ADD COLUMN route_session_key TEXT NOT NULL DEFAULT ''"
             )
+        task_columns = {
+            row["name"] for row in self._db.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        if "kind" not in task_columns:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'primary'")
+        if "session_file" not in task_columns:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN session_file TEXT")
+        if "branch" not in task_columns:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN branch TEXT")
+        if "worktree_path" not in task_columns:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN worktree_path TEXT")
+        if "base_commit" not in task_columns:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN base_commit TEXT")
+        if "cost_usd" not in task_columns:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0")
+        if "review" not in task_columns:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN review TEXT")
 
     def close(self) -> None:
         with self._lock:
@@ -230,15 +254,21 @@ class Store:
         return dict(row) if row else None
 
     def create_task(
-        self, project_id: str, task: str, status: str, route_session_key: str | None
+        self,
+        project_id: str,
+        task: str,
+        status: str,
+        route_session_key: str | None,
+        kind: str = "primary",
     ) -> dict[str, Any]:
         task_id = new_id("task")
         timestamp = now_ms()
         with self._lock, self._db:
             self._db.execute(
-                """INSERT INTO tasks(task_id,project_id,task,status,route_session_key,created_at,updated_at)
-                   VALUES(?,?,?,?,?,?,?)""",
-                (task_id, project_id, task, status, route_session_key, timestamp, timestamp),
+                """INSERT INTO tasks
+                   (task_id,project_id,task,status,kind,route_session_key,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?)""",
+                (task_id, project_id, task, status, kind, route_session_key, timestamp, timestamp),
             )
         return self.get_task(task_id) or {}
 
@@ -251,16 +281,23 @@ class Store:
         current = self.get_task(task_id)
         if not current:
             return None
-        allowed = {"status", "worker_session_id", "decision_id", "result", "error", "route_session_key"}
+        allowed = {
+            "status", "kind", "worker_session_id", "session_file", "branch", "worktree_path",
+            "base_commit", "cost_usd", "review", "decision_id", "result", "error",
+            "route_session_key",
+        }
         current.update({key: value for key, value in changes.items() if key in allowed})
         with self._lock, self._db:
             self._db.execute(
-                """UPDATE tasks SET status=?,worker_session_id=?,decision_id=?,result=?,error=?,
+                """UPDATE tasks SET status=?,kind=?,worker_session_id=?,session_file=?,branch=?,
+                   worktree_path=?,base_commit=?,cost_usd=?,review=?,decision_id=?,result=?,error=?,
                    route_session_key=?,updated_at=? WHERE task_id=?""",
                 (
-                    current["status"], current["worker_session_id"], current["decision_id"],
-                    current["result"], current["error"], current["route_session_key"],
-                    now_ms(), task_id,
+                    current["status"], current["kind"], current["worker_session_id"],
+                    current["session_file"], current["branch"], current["worktree_path"],
+                    current["base_commit"], current["cost_usd"], current["review"],
+                    current["decision_id"], current["result"], current["error"],
+                    current["route_session_key"], now_ms(), task_id,
                 ),
             )
         return self.get_task(task_id)

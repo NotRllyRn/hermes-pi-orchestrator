@@ -193,6 +193,13 @@ class DashboardClient:
     def parallel_spawn(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.rest("POST", "/api/hermes-orchestrator/parallel", payload)
 
+    def child_review(self, task_id: str) -> dict[str, Any]:
+        return self.rest("GET", f"/api/hermes-orchestrator/child/{quote(task_id, safe='')}/review")
+
+    def child_integrate(self, task_id: str, strategy: str) -> dict[str, Any]:
+        path = f"/api/hermes-orchestrator/child/{quote(task_id, safe='')}/integrate"
+        return self.rest("POST", path, {"strategy": strategy})
+
     def rest(self, method: str, path: str, body: Any = None) -> Any:
         data = json.dumps(body).encode() if body is not None else None
         request = Request(

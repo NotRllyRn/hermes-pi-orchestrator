@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 
 def _normalized(message: str) -> str:
     return " ".join(message.lower().strip().strip(" .,!?:;\"'").split())
@@ -34,6 +36,20 @@ def parse_dirty_choice(message: str) -> str | None:
         "head": {"head", "committed head", "start from head", "use current committed head",
                  "exclude uncommitted changes", "2", "option 2"},
     })
+
+
+def parse_integration(message: str) -> str | None:
+    """Parse one explicit child integration strategy from a user request."""
+    normalized = _normalized(message).replace("-", "_")
+    patterns = {
+        "merge": r"\bmerge\b",
+        "cherry_pick": r"\bcherry[ _]pick\b",
+        "leave_branch": r"\bleave (?:the )?branch\b|\bretain (?:the )?branch\b",
+    }
+    found = [choice for choice, pattern in patterns.items() if re.search(pattern, normalized)]
+    if len(found) != 1 or re.search(r"\b(?:don't|do not|never)\b", normalized):
+        return None
+    return found[0]
 
 
 def parse_approval(message: str) -> str | None:

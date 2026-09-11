@@ -68,7 +68,7 @@ describe("Server C safety helpers", () => {
       { allowedRoots: [root] },
       {
         projectId: "project-1", taskId: "12345678-rest", repoRoot: repo,
-        primarySessionFile: "/sessions/primary.jsonl", prompt: "Build feature",
+        primarySessionFile: "/sessions/primary.jsonl", primarySessionId: "primary", prompt: "Build feature",
       }
     );
 
@@ -88,7 +88,7 @@ describe("Server C safety helpers", () => {
     git(repo, "config", "user.name", "Test");
     git(repo, "commit", "--allow-empty", "-m", "init");
     const ctx = {
-      sessionManager: { listAll: () => [{ sessionFile: "/sessions/primary.jsonl" }] },
+      sessionManager: { listAll: () => [{ id: "primary", sessionFile: "/sessions/primary.jsonl" }] },
       spawnSession: async () => ({ success: false, message: "no spawn" }),
       abortSpawnedRun: async () => true,
     } as unknown as Parameters<typeof createParallelWorker>[0];
@@ -98,7 +98,7 @@ describe("Server C safety helpers", () => {
       { allowedRoots: [root] },
       {
         projectId: "project-1", taskId: "87654321-rest", repoRoot: repo,
-        primarySessionFile: "/sessions/primary.jsonl", prompt: "Fail spawn",
+        primarySessionFile: "/sessions/primary.jsonl", primarySessionId: "primary", prompt: "Fail spawn",
       }
     )).rejects.toThrow("no spawn");
 

@@ -3,6 +3,7 @@ import { homedir, hostname } from "node:os";
 import path from "node:path";
 import type { ServerPluginContext } from "@blackbelt-technology/dashboard-plugin-runtime/server";
 import { execFileSync } from "@blackbelt-technology/pi-dashboard-shared/platform/exec.js";
+import { childReview, integrateChild, type IntegrationStrategy } from "./lifecycle.js";
 import { TransactionJournal, type TransactionState } from "./transactions.js";
 
 interface PluginConfig {
@@ -28,6 +29,7 @@ interface ParallelRequest {
   taskId: string;
   repoRoot: string;
   primarySessionFile: string;
+  primarySessionId: string;
   prompt: string;
   baseBranch?: string;
   dirtyPolicy?: "reject" | "head";
@@ -40,6 +42,7 @@ interface ParallelResult {
   worktreePath: string;
   spawnToken: string;
   baseCommit: string;
+  baseBranch: string;
 }
 
 function inside(root: string, candidate: string): boolean {
@@ -99,7 +102,8 @@ export async function createParallelWorker(
   progress: (state: TransactionState, details: Partial<ParallelResult>) => void = () => {},
 ): Promise<ParallelResult> {
   const source = (ctx.sessionManager.listAll() as SessionView[]).find(
-    (session) => session.sessionFile === request.primarySessionFile,
+    (session) => session.sessionFile === request.primarySessionFile &&
+      (session.id === request.primarySessionId || session.sessionId === request.primarySessionId),
   );
   if (!source) throw new Error("primary Pi session file is not known to Dashboard");
   const prepared = prepareParallelWorktree(config, request);
@@ -135,7 +139,7 @@ export async function createParallelWorker(
 function prepareParallelWorktree(
   config: PluginConfig,
   request: ParallelRequest,
-): Pick<ParallelResult, "branch" | "worktreePath" | "baseCommit"> & { repoRoot: string } {
+): Pick<ParallelResult, "branch" | "worktreePath" | "baseCommit" | "baseBranch"> & { repoRoot: string } {
   const roots = config.allowedRoots ?? [];
   if (roots.length === 0) throw new Error("plugin allowedRoots is not configured");
   const repoRoot = canonicalRepository(request.repoRoot, roots);
@@ -145,7 +149,12 @@ function prepareParallelWorktree(
   mkdirSync(requestedRoot, { recursive: true });
   const worktreeRoot = realpathSync(requestedRoot);
   if (!inside(root, worktreeRoot)) throw new Error("canonical worktreeRoot escapes configured allowedRoots");
-  const baseCommit = execFileSync("git", ["-C", repoRoot, "rev-parse", request.baseBranch ?? "HEAD"], {
+  const baseBranch = request.baseBranch ?? execFileSync("git", ["-C", repoRoot, "branch", "--show-current"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  }).trim();
+  if (!baseBranch) throw new Error("parallel creation requires a named primary branch");
+  const baseCommit = execFileSync("git", ["-C", repoRoot, "rev-parse", baseBranch], {
     encoding: "utf8",
     timeout: 10_000,
   }).trim();
@@ -161,14 +170,14 @@ function prepareParallelWorktree(
   const branch = `hermes/${slug}-${suffix}`;
   const worktreePath = path.join(worktreeRoot, `${slug}-${suffix}`);
   try {
-    execFileSync("git", ["-C", repoRoot, "worktree", "add", "-b", branch, worktreePath, request.baseBranch ?? "HEAD"], {
+    execFileSync("git", ["-C", repoRoot, "worktree", "add", "-b", branch, worktreePath, baseBranch], {
       encoding: "utf8",
       timeout: 30_000,
     });
     if (config.initCommand) {
       execFileSync("sh", ["-lc", config.initCommand], { cwd: worktreePath, encoding: "utf8", timeout: 120_000 });
     }
-    return { repoRoot, branch, worktreePath, baseCommit };
+    return { repoRoot, branch, worktreePath, baseCommit, baseBranch };
   } catch (error) {
     tryGit(repoRoot, ["worktree", "remove", "--force", worktreePath]);
     tryGit(repoRoot, ["branch", "-D", branch]);
@@ -267,9 +276,12 @@ export function register(ctx: ServerPluginContext): void {
     "/api/hermes-orchestrator/parallel",
     async (request, reply) => {
       const body = request.body;
-      if (!body?.projectId || !body.taskId || !body.repoRoot || !body.primarySessionFile || !body.prompt) {
+      if (
+        !body?.projectId || !body.taskId || !body.repoRoot || !body.primarySessionFile ||
+        !body.primarySessionId || !body.prompt
+      ) {
         return reply.code(400).send({
-          error: "projectId, taskId, repoRoot, primarySessionFile, and prompt are required",
+          error: "projectId, taskId, repoRoot, primarySessionFile, primarySessionId, and prompt are required",
         });
       }
       const existing = journal.get(body.taskId);
@@ -284,7 +296,13 @@ export function register(ctx: ServerPluginContext): void {
         return reply.code(409).send({ error: "parallel creation is already active for this project" });
       }
       activeProjects.add(body.projectId);
-      journal.put({ taskId: body.taskId, projectId: body.projectId, repoRoot: body.repoRoot, state: "preparing" });
+      journal.put({
+        taskId: body.taskId,
+        projectId: body.projectId,
+        repoRoot: body.repoRoot,
+        primarySessionId: body.primarySessionId,
+        state: "preparing",
+      });
       try {
         const result = await createParallelWorker(ctx, config, body, (state, details) => {
           journal.update(body.taskId, { state, ...details });
@@ -301,6 +319,32 @@ export function register(ctx: ServerPluginContext): void {
       }
     },
   );
+
+  ctx.fastify.get<{ Params: { taskId: string } }>(
+    "/api/hermes-orchestrator/child/:taskId/review",
+    async (request, reply) => {
+      try {
+        return boundedJson(childReview(ctx, journal, request.params.taskId));
+      } catch (error) {
+        return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
+      }
+    },
+  );
+
+  ctx.fastify.post<{
+    Params: { taskId: string };
+    Body: { strategy?: IntegrationStrategy };
+  }>("/api/hermes-orchestrator/child/:taskId/integrate", async (request, reply) => {
+    const strategy = request.body?.strategy;
+    if (!strategy || !["merge", "cherry_pick", "leave_branch"].includes(strategy)) {
+      return reply.code(400).send({ error: "strategy must be merge, cherry_pick, or leave_branch" });
+    }
+    try {
+      return integrateChild(ctx, journal, request.params.taskId, strategy);
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
 
   ctx.fastify.get<{ Params: { taskId: string } }>(
     "/api/hermes-orchestrator/transaction/:taskId",

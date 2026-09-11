@@ -52,6 +52,21 @@ TOOLS = {
         },
         ("task_id", "choice"),
     ),
+    "pi_child_review": schema(
+        "pi_child_review",
+        "Fetch a bounded Git and event review package for a parallel child. Does not integrate code.",
+        {"task_id": {"type": "string"}},
+        ("task_id",),
+    ),
+    "pi_child_integrate": schema(
+        "pi_child_integrate",
+        "Integrate an awaiting-review parallel child only when the user explicitly requests a strategy. Never runs automatically.",
+        {
+            "task_id": {"type": "string"},
+            "strategy": {"type": "string", "enum": ["merge", "cherry_pick", "leave_branch"]},
+        },
+        ("task_id", "strategy"),
+    ),
     "pi_task_abort": schema(
         "pi_task_abort", "Abort the current run of a known Dashboard worker without deleting its Pi session.",
         {"worker_id": SESSION_ID}, ("worker_id",),
