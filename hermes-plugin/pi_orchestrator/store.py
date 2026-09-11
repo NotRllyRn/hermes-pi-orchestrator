@@ -113,6 +113,9 @@ CREATE TABLE IF NOT EXISTS notifications (
   kind TEXT NOT NULL,
   message TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
   created_at INTEGER NOT NULL,
   sent_at INTEGER
 );
@@ -163,6 +166,19 @@ class Store:
             self._db.execute("ALTER TABLE tasks ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0")
         if "review" not in task_columns:
             self._db.execute("ALTER TABLE tasks ADD COLUMN review TEXT")
+        notification_columns = {
+            row["name"] for row in self._db.execute("PRAGMA table_info(notifications)").fetchall()
+        }
+        if "attempt_count" not in notification_columns:
+            self._db.execute(
+                "ALTER TABLE notifications ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "next_attempt_at" not in notification_columns:
+            self._db.execute(
+                "ALTER TABLE notifications ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0"
+            )
+        if "last_error" not in notification_columns:
+            self._db.execute("ALTER TABLE notifications ADD COLUMN last_error TEXT")
 
     def close(self) -> None:
         with self._lock:
@@ -441,17 +457,43 @@ class Store:
             )
         return notification_id
 
+    def get_notification(self, notification_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM notifications WHERE notification_id=?", (notification_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
     def pending_notifications(self, limit: int = 20) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._db.execute(
-                "SELECT * FROM notifications WHERE status='pending' ORDER BY created_at LIMIT ?",
-                (limit,),
+                """SELECT * FROM notifications
+                   WHERE status='pending' AND next_attempt_at<=? ORDER BY created_at LIMIT ?""",
+                (now_ms(), limit),
             ).fetchall()
         return [dict(row) for row in rows]
 
     def mark_notification_sent(self, notification_id: str) -> None:
         with self._lock, self._db:
             self._db.execute(
-                "UPDATE notifications SET status='sent',sent_at=? WHERE notification_id=?",
+                """UPDATE notifications SET status='sent',sent_at=?,last_error=NULL
+                   WHERE notification_id=? AND status='pending'""",
                 (now_ms(), notification_id),
+            )
+
+    def mark_notification_failed(self, notification_id: str, error: str) -> None:
+        with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT attempt_count FROM notifications WHERE notification_id=?",
+                (notification_id,),
+            ).fetchone()
+            if not row:
+                return
+            attempts = row["attempt_count"] + 1
+            status = "failed" if attempts >= 8 else "pending"
+            delay_ms = min(300_000, (2 ** min(attempts, 8)) * 1_000)
+            self._db.execute(
+                """UPDATE notifications SET status=?,attempt_count=?,next_attempt_at=?,last_error=?
+                   WHERE notification_id=?""",
+                (status, attempts, now_ms() + delay_ms, error[:1000], notification_id),
             )

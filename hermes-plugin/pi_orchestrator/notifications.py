@@ -12,6 +12,8 @@ class NotificationStore(Protocol):
 
     def mark_notification_sent(self, notification_id: str) -> None: ...
 
+    def mark_notification_failed(self, notification_id: str, error: str) -> None: ...
+
 
 class NotificationWorker:
     def __init__(self, store: NotificationStore, inject: Callable[[str, str], None]):
@@ -40,11 +42,16 @@ class NotificationWorker:
         while not self._stop.is_set():
             self._wake.wait(2)
             self._wake.clear()
-            for notification in self.store.pending_notifications():
-                if self._stop.is_set():
-                    return
-                try:
-                    self.inject(notification["message"], notification["route_session_key"])
-                except Exception:
-                    break
-                self.store.mark_notification_sent(notification["notification_id"])
+            self.run_once()
+
+    def run_once(self) -> None:
+        """Deliver each due notification once per attempt; persist retry state."""
+        for notification in self.store.pending_notifications():
+            if self._stop.is_set():
+                return
+            try:
+                self.inject(notification["message"], notification["route_session_key"])
+            except Exception as exc:
+                self.store.mark_notification_failed(notification["notification_id"], str(exc))
+                break
+            self.store.mark_notification_sent(notification["notification_id"])

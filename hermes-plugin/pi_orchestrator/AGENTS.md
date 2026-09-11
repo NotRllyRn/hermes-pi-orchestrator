@@ -4,7 +4,7 @@
 | ------ | --------- |
 | `__init__.py` | Python package marker. |
 | `choice_parser.py` | Strict parsers for concurrency, dirty-tree, approval, and integration evidence. |
-| `notifications.py` | Durable asynchronous Hermes gateway notification worker. |
+| `notifications.py` | Durable route-bound Hermes notification worker with persisted bounded retry. |
 | `reducer.py` | Deterministic compact projection of Dashboard sessions and significant Pi events. |
 | `runtime.py` | Hermes tools, raw-turn policy hooks, connection startup, and unload cleanup. |
 | `schemas.py` | Model-facing schemas for project, task, activity, and bounded diagnostics tools. |
