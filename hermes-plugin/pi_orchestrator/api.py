@@ -122,6 +122,7 @@ class ControlApi:
         if method == "GET" and path == "/health":
             return HTTPStatus.OK, {"ok": True}
         if method == "GET" and path == "/sessions":
+            self.manager.reconcile()
             return HTTPStatus.OK, [self.manager.status(item.session_key) for item in self.store.list_sessions()]
         if method == "GET" and path == "/queue":
             return HTTPStatus.OK, [asdict(task) for task in self.store.list_tasks()]

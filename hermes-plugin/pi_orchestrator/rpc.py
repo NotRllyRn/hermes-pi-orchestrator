@@ -266,6 +266,7 @@ class PiManager:
         return {
             **session.__dict__,
             "process_running": bool(process and process.running),
+            "pid": process.process.pid if process and process.running else None,
             "stderr": process.stderr if process else "",
         }
 

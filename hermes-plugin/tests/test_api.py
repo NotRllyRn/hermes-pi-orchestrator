@@ -12,6 +12,9 @@ class StubManager:
     def __init__(self, store):
         self.store = store
 
+    def reconcile(self):
+        return None
+
     def status(self, session_key):
         session = self.store.get_session(session_key)
         return session.__dict__ if session else {}

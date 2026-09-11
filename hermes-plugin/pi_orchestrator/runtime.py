@@ -149,11 +149,11 @@ def register_plugin(ctx) -> None:
     def post_llm_call(**_kwargs: Any) -> None:
         manager.reconcile()
 
-    def on_session_end(**_kwargs: Any) -> None:
+    def cleanup() -> None:
         api.stop()
         queue_worker.shutdown()
         manager.stop_all()
 
     ctx.register_hook("pre_llm_call", pre_llm_call)
     ctx.register_hook("post_llm_call", post_llm_call)
-    ctx.register_hook("on_session_end", on_session_end)
+    ctx.on_unload(cleanup)
