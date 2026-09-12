@@ -1,10 +1,12 @@
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import path from "node:path";
 import type { ServerPluginContext } from "@blackbelt-technology/dashboard-plugin-runtime/server";
 import { execFileSync } from "@blackbelt-technology/pi-dashboard-shared/platform/exec.js";
-import { childReview, integrateChild, type IntegrationStrategy } from "./lifecycle.js";
-import { TransactionJournal, type TransactionState } from "./transactions.js";
+import { childReview, type IntegrationStrategy, integrateChild } from "./lifecycle.js";
+import { buildOverview, sendPrimaryPrompt } from "./overview.js";
+import { TransactionJournal, type TransactionRecord, type TransactionState } from "./transactions.js";
 
 interface PluginConfig {
   allowedRoots?: string[];
@@ -32,7 +34,16 @@ interface ParallelRequest {
   primarySessionId: string;
   prompt: string;
   baseBranch?: string;
-  dirtyPolicy?: "reject" | "head";
+  baseCommit?: string;
+  authorizationToken?: string;
+}
+
+interface ControlRequest {
+  path?: string;
+  action?: "queue" | "steer" | "abort";
+  sessionId?: string;
+  taskId?: string;
+  message?: string;
 }
 
 interface ParallelResult {
@@ -43,6 +54,7 @@ interface ParallelResult {
   spawnToken: string;
   baseCommit: string;
   baseBranch: string;
+  repoRoot: string;
 }
 
 function inside(root: string, candidate: string): boolean {
@@ -95,18 +107,56 @@ export function boundedJson(value: unknown, maxBytes = 32 * 1024): { data: JsonV
   };
 }
 
-export async function createParallelWorker(
+function validatedProjectRoot(
   ctx: ServerPluginContext,
   config: PluginConfig,
   request: ParallelRequest,
-  progress: (state: TransactionState, details: Partial<ParallelResult>) => void = () => {},
-): Promise<ParallelResult> {
+): string {
   const source = (ctx.sessionManager.listAll() as SessionView[]).find(
     (session) => session.sessionFile === request.primarySessionFile &&
       (session.id === request.primarySessionId || session.sessionId === request.primarySessionId),
   );
   if (!source) throw new Error("primary Pi session file is not known to Dashboard");
-  const prepared = prepareParallelWorktree(config, request);
+  if (!source.cwd) throw new Error("primary Pi session has no project path");
+  const roots = config.allowedRoots ?? [];
+  if (roots.length === 0) throw new Error("plugin allowedRoots is not configured");
+  const repoRoot = canonicalRepository(request.repoRoot, roots);
+  if (canonicalRepository(source.cwd, roots) !== repoRoot) {
+    throw new Error("primary Pi session belongs to a different project");
+  }
+  return repoRoot;
+}
+
+function projectIsDirty(repoRoot: string): boolean {
+  return Boolean(execFileSync("git", ["-C", repoRoot, "status", "--porcelain"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  }).trim());
+}
+
+function currentBranch(repoRoot: string): string {
+  return execFileSync("git", ["-C", repoRoot, "branch", "--show-current"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  }).trim();
+}
+
+function branchCommit(repoRoot: string, branch: string): string {
+  return execFileSync("git", ["-C", repoRoot, "rev-parse", branch], {
+    encoding: "utf8",
+    timeout: 10_000,
+  }).trim();
+}
+
+export async function createParallelWorker(
+  ctx: ServerPluginContext,
+  config: PluginConfig,
+  request: ParallelRequest,
+  progress: (state: TransactionState, details: Partial<ParallelResult>) => void = () => {},
+  allowDirty = false,
+): Promise<ParallelResult> {
+  const repoRoot = validatedProjectRoot(ctx, config, request);
+  const prepared = prepareParallelWorktree(config, request, repoRoot, allowDirty);
   progress("worktree_created", prepared);
   let spawnToken: string | undefined;
   let sessionId: string | undefined;
@@ -139,10 +189,10 @@ export async function createParallelWorker(
 function prepareParallelWorktree(
   config: PluginConfig,
   request: ParallelRequest,
-): Pick<ParallelResult, "branch" | "worktreePath" | "baseCommit" | "baseBranch"> & { repoRoot: string } {
+  repoRoot: string,
+  allowDirty: boolean,
+): Pick<ParallelResult, "branch" | "worktreePath" | "baseCommit" | "baseBranch" | "repoRoot"> {
   const roots = config.allowedRoots ?? [];
-  if (roots.length === 0) throw new Error("plugin allowedRoots is not configured");
-  const repoRoot = canonicalRepository(request.repoRoot, roots);
   const root = realpathSync(roots[0]);
   const requestedRoot = path.resolve(config.worktreeRoot ?? path.join(root, ".hermes-worktrees"));
   if (!inside(root, requestedRoot)) throw new Error("worktreeRoot is outside configured allowedRoots");
@@ -154,23 +204,16 @@ function prepareParallelWorktree(
     timeout: 10_000,
   }).trim();
   if (!baseBranch) throw new Error("parallel creation requires a named primary branch");
-  const baseCommit = execFileSync("git", ["-C", repoRoot, "rev-parse", baseBranch], {
-    encoding: "utf8",
-    timeout: 10_000,
-  }).trim();
-  const dirty = execFileSync("git", ["-C", repoRoot, "status", "--porcelain"], {
-    encoding: "utf8",
-    timeout: 10_000,
-  }).trim();
-  if (dirty && request.dirtyPolicy !== "head") {
-    throw new Error("primary working tree is dirty; choose wait or committed HEAD explicitly");
+  const baseCommit = request.baseCommit ?? branchCommit(repoRoot, baseBranch);
+  if (projectIsDirty(repoRoot) && !allowDirty) {
+    throw new Error("primary working tree is dirty; use Hermes to authorize committed HEAD in a later turn");
   }
   const suffix = request.taskId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "task";
   const slug = request.prompt.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "work";
   const branch = `hermes/${slug}-${suffix}`;
   const worktreePath = path.join(worktreeRoot, `${slug}-${suffix}`);
   try {
-    execFileSync("git", ["-C", repoRoot, "worktree", "add", "-b", branch, worktreePath, baseBranch], {
+    execFileSync("git", ["-C", repoRoot, "worktree", "add", "-b", branch, worktreePath, baseCommit], {
       encoding: "utf8",
       timeout: 30_000,
     });
@@ -183,6 +226,41 @@ function prepareParallelWorktree(
     tryGit(repoRoot, ["branch", "-D", branch]);
     throw error;
   }
+}
+
+function tokenHash(token: string): Buffer {
+  return createHash("sha256").update(token).digest();
+}
+
+function safeEqual(left: string, right: string): boolean {
+  const leftBytes = Buffer.from(left);
+  const rightBytes = Buffer.from(right);
+  return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function validAuthorization(transaction: TransactionRecord | undefined, token: string | undefined): boolean {
+  if (!transaction || !token || !transaction.authorizationTokenHash || !transaction.authorizationExpiresAt) return false;
+  if (Date.parse(transaction.authorizationExpiresAt) <= Date.now()) return false;
+  return safeEqual(transaction.authorizationTokenHash, tokenHash(token).toString("hex"));
+}
+
+function hermesAuthorized(header: string | string[] | undefined): boolean {
+  const expected = process.env.PI_ORCHESTRATOR_AUTH_SECRET;
+  const provided = Array.isArray(header) ? header[0] : header;
+  return Boolean(expected && provided && safeEqual(expected, provided));
+}
+
+function publicOperation(value: ParallelResult | TransactionRecord): Record<string, unknown> {
+  const {
+    authorizationTokenHash: _authorizationTokenHash,
+    spawnToken: _spawnToken,
+    ...publicValue
+  } = value as TransactionRecord;
+  return publicValue;
 }
 
 async function rollbackParallel(
@@ -232,6 +310,146 @@ function parallelOrientation(
   ].join("\n");
 }
 
+async function controlProject(
+  ctx: ServerPluginContext,
+  journal: TransactionJournal,
+  config: PluginConfig,
+  body: ControlRequest,
+): Promise<Record<string, unknown>> {
+  const repoRoot = canonicalRepository(body.path ?? "", config.allowedRoots ?? []);
+  if (body.action === "abort") {
+    const transaction = body.taskId ? journal.get(body.taskId) : undefined;
+    if (!transaction || transaction.repoRoot !== repoRoot || !transaction.sessionId) {
+      throw new Error("parallel child not found");
+    }
+    const aborted = await ctx.abortSpawnedRun({
+      sessionId: transaction.sessionId, spawnToken: transaction.spawnToken, graceful: false,
+    });
+    if (!aborted) throw new Error("child is not running");
+    return { accepted: true };
+  }
+  if (!body.sessionId || !body.message?.trim()) {
+    throw new Error("sessionId and message are required");
+  }
+  const primary = (ctx.sessionManager.listAll() as SessionView[]).find(
+    (session) => (session.id === body.sessionId || session.sessionId === body.sessionId) &&
+      session.cwd && realpathOrOriginal(session.cwd) === repoRoot,
+  );
+  if (!primary) throw new Error("primary session not found in project");
+  const delivery = body.action === "steer" ? "steer" : "followUp";
+  sendPrimaryPrompt(ctx, body.sessionId, body.message.trim(), delivery);
+  return { accepted: true, delivery };
+}
+
+function validParallelRequest(body: ParallelRequest | undefined): body is ParallelRequest {
+  return Boolean(
+    body?.projectId && body.taskId && body.repoRoot && body.primarySessionFile &&
+    body.primarySessionId && body.prompt,
+  );
+}
+
+function issueParallelAuthorization(
+  ctx: ServerPluginContext,
+  config: PluginConfig,
+  journal: TransactionJournal,
+  body: ParallelRequest,
+): { authorizationToken: string; authorizationExpiresAt: string } {
+  const repoRoot = validatedProjectRoot(ctx, config, body);
+  if (!projectIsDirty(repoRoot)) throw new Error("primary working tree is clean");
+  if (journal.get(body.taskId)) throw new Error("parallel authorization already exists for this task");
+  const authorizationToken = randomBytes(32).toString("base64url");
+  const authorizationExpiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+  const baseBranch = body.baseBranch ?? currentBranch(repoRoot);
+  if (!baseBranch) throw new Error("parallel authorization requires a named primary branch");
+  const baseCommit = branchCommit(repoRoot, baseBranch);
+  journal.put({
+    taskId: body.taskId,
+    projectId: body.projectId,
+    repoRoot,
+    prompt: body.prompt,
+    primarySessionId: body.primarySessionId,
+    primarySessionFile: body.primarySessionFile,
+    baseBranch,
+    baseCommit,
+    state: "authorization_pending",
+    authorizationTokenHash: tokenHash(authorizationToken).toString("hex"),
+    authorizationExpiresAt,
+  });
+  return { authorizationToken, authorizationExpiresAt };
+}
+
+function beginParallelTransaction(
+  ctx: ServerPluginContext,
+  config: PluginConfig,
+  journal: TransactionJournal,
+  activeProjects: Set<string>,
+  body: ParallelRequest,
+): { repoRoot: string; dirty: boolean; baseBranch: string; baseCommit: string; replay?: TransactionRecord } {
+  const repoRoot = validatedProjectRoot(ctx, config, body);
+  const dirty = projectIsDirty(repoRoot);
+  const baseBranch = body.baseBranch ?? currentBranch(repoRoot);
+  if (!baseBranch) throw new Error("parallel creation requires a named primary branch");
+  const baseCommit = branchCommit(repoRoot, baseBranch);
+  const existing = journal.get(body.taskId);
+  if (existing?.state === "complete") return { repoRoot, dirty, baseBranch, baseCommit, replay: existing };
+  if (existing?.state === "authorization_pending" && (
+    !validAuthorization(existing, body.authorizationToken) ||
+    existing.repoRoot !== repoRoot || existing.projectId !== body.projectId ||
+    existing.primarySessionId !== body.primarySessionId ||
+    existing.primarySessionFile !== body.primarySessionFile ||
+    existing.prompt !== body.prompt || existing.baseBranch !== baseBranch ||
+    existing.baseCommit !== baseCommit
+  )) {
+    throw new Error("parallel authorization does not match the authorized request");
+  }
+  if (dirty && existing?.state !== "authorization_pending") {
+    throw new Error("dirty parallel start requires a valid one-time authorization");
+  }
+  if (existing && existing.state !== "authorization_pending") {
+    throw new Error("parallel transaction already exists and will not be replayed automatically");
+  }
+  if (activeProjects.has(repoRoot)) throw new Error("parallel creation is already active for this project");
+  activeProjects.add(repoRoot);
+  const transaction = {
+    taskId: body.taskId,
+    projectId: body.projectId,
+    repoRoot,
+    prompt: body.prompt,
+    primarySessionId: body.primarySessionId,
+    primarySessionFile: body.primarySessionFile,
+    baseBranch,
+    baseCommit,
+    state: "preparing" as const,
+    authorizationTokenHash: undefined,
+    authorizationExpiresAt: undefined,
+  };
+  if (existing) journal.update(body.taskId, transaction);
+  else journal.put(transaction);
+  return { repoRoot, dirty, baseBranch, baseCommit };
+}
+
+async function spawnParallelTransaction(
+  ctx: ServerPluginContext,
+  config: PluginConfig,
+  journal: TransactionJournal,
+  body: ParallelRequest,
+  repoRoot: string,
+  allowDirty: boolean,
+): Promise<ParallelResult> {
+  try {
+    const result = await createParallelWorker(ctx, config, { ...body, repoRoot }, (state, details) => {
+      journal.update(body.taskId, { state, ...details });
+    }, allowDirty);
+    journal.update(body.taskId, { state: "complete", ...result });
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    journal.update(body.taskId, { state: "failed", error: message });
+    ctx.logger.error("Parallel worker transaction rolled back", error);
+    throw error;
+  }
+}
+
 export function register(ctx: ServerPluginContext): void {
   const config = ctx.getPluginConfig<PluginConfig>();
   const configuredRoots = config.allowedRoots ?? [];
@@ -271,51 +489,85 @@ export function register(ctx: ServerPluginContext): void {
     },
   );
 
+  ctx.fastify.get<{ Querystring: { path?: string } }>(
+    "/api/hermes-orchestrator/overview",
+    async (request, reply) => {
+      try {
+        if (!request.query.path) return reply.code(400).send({ error: "path is required" });
+        const repoRoot = canonicalRepository(request.query.path, configuredRoots);
+        const branch = execFileSync("git", ["-C", repoRoot, "branch", "--show-current"], {
+          encoding: "utf8", timeout: 10_000,
+        }).trim();
+        const head = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], {
+          encoding: "utf8", timeout: 10_000,
+        }).trim();
+        const dirty = Boolean(execFileSync("git", ["-C", repoRoot, "status", "--porcelain"], {
+          encoding: "utf8", timeout: 10_000,
+        }).trim());
+        return buildOverview(ctx, journal, repoRoot, { branch, head, dirty });
+      } catch (error) {
+        return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+      }
+    },
+  );
+
+  ctx.fastify.post<{ Body: ControlRequest }>(
+    "/api/hermes-orchestrator/control",
+    async (request, reply) => {
+      if (!request.body?.path || !request.body.action) {
+        return reply.code(400).send({ error: "path and action are required" });
+      }
+      try {
+        return await controlProject(ctx, journal, config, request.body);
+      } catch (error) {
+        return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
+      }
+    },
+  );
+
+  ctx.fastify.post<{ Body: ParallelRequest }>(
+    "/api/hermes-orchestrator/parallel/authorize",
+    async (request, reply) => {
+      if (!hermesAuthorized(request.headers["x-hermes-orchestrator-authorization"])) {
+        return reply.code(403).send({ error: "Hermes authorization is required" });
+      }
+      const body = request.body;
+      if (!validParallelRequest(body)) return reply.code(400).send({ error: "parallel request fields are required" });
+      try {
+        return issueParallelAuthorization(ctx, config, journal, body);
+      } catch (error) {
+        return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
+      }
+    },
+  );
+
   const activeProjects = new Set<string>();
   ctx.fastify.post<{ Body: ParallelRequest }>(
     "/api/hermes-orchestrator/parallel",
     async (request, reply) => {
+      if (!hermesAuthorized(request.headers["x-hermes-orchestrator-authorization"])) {
+        return reply.code(403).send({ error: "Hermes authorization is required" });
+      }
       const body = request.body;
-      if (
-        !body?.projectId || !body.taskId || !body.repoRoot || !body.primarySessionFile ||
-        !body.primarySessionId || !body.prompt
-      ) {
-        return reply.code(400).send({
-          error: "projectId, taskId, repoRoot, primarySessionFile, primarySessionId, and prompt are required",
-        });
-      }
-      const existing = journal.get(body.taskId);
-      if (existing?.state === "complete") return existing;
-      if (existing) {
-        return reply.code(409).send({
-          error: "parallel transaction already exists and will not be replayed automatically",
-          transaction: existing,
-        });
-      }
-      if (activeProjects.has(body.projectId)) {
-        return reply.code(409).send({ error: "parallel creation is already active for this project" });
-      }
-      activeProjects.add(body.projectId);
-      journal.put({
-        taskId: body.taskId,
-        projectId: body.projectId,
-        repoRoot: body.repoRoot,
-        primarySessionId: body.primarySessionId,
-        state: "preparing",
-      });
+      if (!validParallelRequest(body)) return reply.code(400).send({ error: "parallel request fields are required" });
+      let started: ReturnType<typeof beginParallelTransaction>;
       try {
-        const result = await createParallelWorker(ctx, config, body, (state, details) => {
-          journal.update(body.taskId, { state, ...details });
-        });
-        journal.update(body.taskId, { state: "complete", ...result });
-        return result;
+        started = beginParallelTransaction(ctx, config, journal, activeProjects, body);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        journal.update(body.taskId, { state: "failed", error: message });
-        ctx.logger.error("Parallel worker transaction rolled back", error);
-        return reply.code(500).send({ error: message });
+        return reply.code(409).send({ error: errorMessage(error) });
+      }
+      if (started.replay) return publicOperation(started.replay);
+      try {
+        const result = await spawnParallelTransaction(
+          ctx, config, journal,
+          { ...body, baseBranch: started.baseBranch, baseCommit: started.baseCommit },
+          started.repoRoot, started.dirty,
+        );
+        return publicOperation(result);
+      } catch (error) {
+        return reply.code(500).send({ error: errorMessage(error) });
       } finally {
-        activeProjects.delete(body.projectId);
+        activeProjects.delete(started.repoRoot);
       }
     },
   );
@@ -324,7 +576,7 @@ export function register(ctx: ServerPluginContext): void {
     "/api/hermes-orchestrator/child/:taskId/review",
     async (request, reply) => {
       try {
-        return boundedJson(childReview(ctx, journal, request.params.taskId));
+        return boundedJson(childReview(ctx, journal, request.params.taskId), 256 * 1024);
       } catch (error) {
         return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
       }
@@ -335,6 +587,9 @@ export function register(ctx: ServerPluginContext): void {
     Params: { taskId: string };
     Body: { strategy?: IntegrationStrategy };
   }>("/api/hermes-orchestrator/child/:taskId/integrate", async (request, reply) => {
+    if (!hermesAuthorized(request.headers["x-hermes-orchestrator-authorization"])) {
+      return reply.code(403).send({ error: "Hermes authorization is required" });
+    }
     const strategy = request.body?.strategy;
     if (!strategy || !["merge", "cherry_pick", "leave_branch"].includes(strategy)) {
       return reply.code(400).send({ error: "strategy must be merge, cherry_pick, or leave_branch" });
@@ -348,7 +603,11 @@ export function register(ctx: ServerPluginContext): void {
 
   ctx.fastify.get<{ Params: { taskId: string } }>(
     "/api/hermes-orchestrator/transaction/:taskId",
-    async (request, reply) => journal.get(request.params.taskId) ?? reply.code(404).send({ error: "not found" }),
+    async (request, reply) => {
+      const transaction = journal.get(request.params.taskId);
+      if (!transaction) return reply.code(404).send({ error: "not found" });
+      return publicOperation(transaction);
+    },
   );
 
   ctx.fastify.get<{

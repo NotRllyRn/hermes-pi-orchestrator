@@ -21,6 +21,14 @@ def test_project_binding_and_tasks_survive_reopen(tmp_path):
     reopened.close()
 
 
+def test_state_directory_and_database_are_owner_only(tmp_path):
+    path = tmp_path / "private" / "state.db"
+    store = Store(path)
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+    assert path.stat().st_mode & 0o777 == 0o600
+    store.close()
+
+
 def test_activity_deduplicates_replayed_sequence(tmp_path):
     store = Store(tmp_path / "state.db")
     assert store.add_activity("s1", "agent_settled", "done", seq=7)

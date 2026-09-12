@@ -11,11 +11,14 @@ describe("orchestrator plugin manifest", () => {
   const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as Record<string, unknown>;
   const manifest = pkg["pi-dashboard-plugin"] as Record<string, unknown>;
 
-  it("is a valid server-only plugin", () => {
+  it("registers valid server, bridge, sidebar, and project-board entries", () => {
     const validated = validateManifest(manifest, "orchestrator");
     expect(validated.id).toBe("hermes-pi-orchestrator");
     expect(validated.server).toBeTruthy();
-    expect(validated.client).toBeUndefined();
-    expect(validated.claims).toEqual([]);
+    expect(validated.bridge).toBeTruthy();
+    expect(validated.client).toBeTruthy();
+    expect(validated.claims.map((claim) => claim.slot)).toEqual([
+      "sidebar-folder-section", "shell-overlay-route",
+    ]);
   });
 });

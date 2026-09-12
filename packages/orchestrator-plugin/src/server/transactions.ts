@@ -2,11 +2,13 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import path from "node:path";
 
 export type TransactionState =
+  | "authorization_pending"
   | "preparing"
   | "worktree_created"
   | "spawned"
   | "sending"
   | "complete"
+  | "awaiting_review"
   | "integrating"
   | "integrated"
   | "retained"
@@ -18,6 +20,7 @@ export interface TransactionRecord {
   state: TransactionState;
   updatedAt: string;
   repoRoot?: string;
+  prompt?: string;
   baseBranch?: string;
   branch?: string;
   worktreePath?: string;
@@ -26,10 +29,13 @@ export interface TransactionRecord {
   sessionFile?: string;
   spawnToken?: string;
   primarySessionId?: string;
+  primarySessionFile?: string;
   integrationStrategy?: string;
   integratedCommit?: string;
   annotationRecorded?: boolean;
   integrationError?: string;
+  authorizationTokenHash?: string;
+  authorizationExpiresAt?: string;
   error?: string;
 }
 

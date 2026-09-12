@@ -39,6 +39,7 @@ class DashboardClient:
         on_message: MessageHandler | None = None,
     ):
         self.base_url = (base_url or os.environ.get("PI_DASHBOARD_URL", "http://127.0.0.1:18000")).rstrip("/")
+        self.authorization_secret = os.environ.get("PI_ORCHESTRATOR_AUTH_SECRET")
         self.sessions: dict[str, dict[str, Any]] = {}
         self.connected = False
         self.last_error: str | None = None
@@ -190,22 +191,29 @@ class DashboardClient:
         query = urlencode({"kind": kind, "limit": limit})
         return self.rest("GET", f"/api/hermes-orchestrator/session/{quote(session_id, safe='')}/diagnostics?{query}")
 
+    def parallel_authorize(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.rest("POST", "/api/hermes-orchestrator/parallel/authorize", payload, authenticated=True)
+
     def parallel_spawn(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self.rest("POST", "/api/hermes-orchestrator/parallel", payload)
+        return self.rest("POST", "/api/hermes-orchestrator/parallel", payload, authenticated=True)
 
     def child_review(self, task_id: str) -> dict[str, Any]:
         return self.rest("GET", f"/api/hermes-orchestrator/child/{quote(task_id, safe='')}/review")
 
     def child_integrate(self, task_id: str, strategy: str) -> dict[str, Any]:
         path = f"/api/hermes-orchestrator/child/{quote(task_id, safe='')}/integrate"
-        return self.rest("POST", path, {"strategy": strategy})
+        return self.rest("POST", path, {"strategy": strategy}, authenticated=True)
 
-    def rest(self, method: str, path: str, body: Any = None) -> Any:
+    def rest(
+        self, method: str, path: str, body: Any = None, *, authenticated: bool = False
+    ) -> Any:
         data = json.dumps(body).encode() if body is not None else None
-        request = Request(
-            f"{self.base_url}{path}", data=data, method=method,
-            headers={"Content-Type": "application/json"} if data else {},
-        )
+        headers = {"Content-Type": "application/json"} if data else {}
+        if authenticated:
+            if not self.authorization_secret:
+                raise DashboardError("PI_ORCHESTRATOR_AUTH_SECRET is not configured")
+            headers["X-Hermes-Orchestrator-Authorization"] = self.authorization_secret
+        request = Request(f"{self.base_url}{path}", data=data, method=method, headers=headers)
         try:
             with urlopen(request, timeout=15) as response:
                 raw = response.read(1_048_577)

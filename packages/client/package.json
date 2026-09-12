@@ -43,7 +43,7 @@
     "@blackbelt-technology/pi-dashboard-roles-plugin": "^0.8.0",
     "@blackbelt-technology/pi-dashboard-shared": "^0.8.0",
     "@blackbelt-technology/pi-dashboard-subagents-plugin": "^0.8.0",
-    "@notrllyrn/pi-dashboard-orchestrator-plugin": "workspace:*",
+    "@notrllyrn/pi-dashboard-orchestrator-plugin": "^0.8.0",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",

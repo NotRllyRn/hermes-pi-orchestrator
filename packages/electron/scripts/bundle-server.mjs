@@ -131,6 +131,7 @@ const BUNDLED_PLUGINS = [
   "grammar-plugin",
   "blackhole-plugin",
   "mcp-server-plugin",
+  "orchestrator-plugin",
   "apple-tools",
   "cost-estimator",
   "quota-plugin",

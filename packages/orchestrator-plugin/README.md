@@ -1,14 +1,17 @@
 # Hermes orchestration plugin for PI Dashboard
 
-Minimal Server C extension used by the Hermes headless Dashboard client. PI Dashboard remains the only Pi session/process/event hub.
+Dashboard server, bridge, and browser surfaces for Hermes-controlled Pi orchestration.
 
-The plugin currently provides:
+## Provides
 
 - canonical project inspection under configured workspace roots;
-- matching Dashboard sessions for primary binding;
-- bounded, secret-redacted event diagnostics;
-- server-side foundations for atomic worktree + forked-session transactions.
+- primary-session binding by canonical repository root;
+- bounded, secret-redacted diagnostics;
+- atomic Git worktree plus forked-session transactions;
+- settled-child review packages and explicit integration routes;
+- project overview, folder status, queue/steer, review, and abort UI;
+- Pi-native queue/steer delivery and durable integration annotations.
 
-Configure `plugins.hermes-pi-orchestrator.allowedRoots` in PI Dashboard settings before project registration. Keep Dashboard bound to loopback and expose it to Server B only through the dedicated SSH local-forward tunnel.
+Parallel spawn and child integration routes require `PI_ORCHESTRATOR_AUTH_SECRET`. Browser UI cannot call them. Hermes must obtain the user's explicit policy choice before invoking either route.
 
-No browser UI or separate Pi process manager is included. Hermes uses Dashboard's existing browser WebSocket protocol for snapshots, replay, `followUp`, `steer`, spawn/resume, abort, and live events.
+Configure `plugins.hermes-pi-orchestrator.allowedRoots` in PI Dashboard settings before project registration. Keep Dashboard bound to loopback. Connect Hermes through a dedicated SSH local-forward tunnel.

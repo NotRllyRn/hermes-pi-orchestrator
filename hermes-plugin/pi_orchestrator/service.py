@@ -26,6 +26,7 @@ class DashboardPort(Protocol):
     def spawn(self, cwd: str, initial_prompt: str) -> dict[str, Any]: ...
     def abort(self, session_id: str) -> None: ...
     def diagnostics(self, session_id: str, kind: str, limit: int) -> Any: ...
+    def parallel_authorize(self, payload: dict[str, Any]) -> dict[str, Any]: ...
     def parallel_spawn(self, payload: dict[str, Any]) -> dict[str, Any]: ...
     def child_review(self, task_id: str) -> dict[str, Any]: ...
     def child_integrate(self, task_id: str, strategy: str) -> dict[str, Any]: ...
@@ -225,6 +226,12 @@ class Orchestrator:
                 evidence = self.store.latest_evidence(hermes_session_id)
                 if not evidence:
                     raise PolicyError("Parallel authorization evidence disappeared")
+                authorization = self.dashboard.parallel_authorize(
+                    self._parallel_payload(project, task)
+                )
+                authorization_token = authorization.get("authorizationToken")
+                if not isinstance(authorization_token, str) or not authorization_token:
+                    raise PolicyError("Dashboard did not issue parallel authorization")
                 self.store.resolve_decision(decision["decision_id"], normalized)
                 preflight = self.store.create_parallel_preflight(
                     task,
@@ -232,6 +239,7 @@ class Orchestrator:
                     evidence["evidence_id"],
                     hermes_session_id,
                     str(evidence["session_key"]),
+                    authorization_token,
                     self.decision_ttl_seconds,
                 )
                 return {
@@ -242,7 +250,7 @@ class Orchestrator:
                     "side_effects": False,
                     "message": "The primary tree is dirty. Ask the user to choose Wait or Committed HEAD on a later turn.",
                 }
-            result = self._start_parallel(project, task, "reject")
+            result = self._start_parallel(project, task)
             status = "running"
         else:
             raise PolicyError("Choice must be queue, steer, or parallel")
@@ -294,11 +302,20 @@ class Orchestrator:
         _preflight, project, task, normalized = self.validate_parallel_preflight(
             task_id, choice, hermes_session_id=hermes_session_id
         )
-        self.store.resolve_parallel_preflight(task_id, normalized)
         if normalized == "wait":
+            self.store.resolve_parallel_preflight(task_id, normalized)
             updated = self.store.update_task(task_id, status="waiting")
             return {"status": "waiting", "task": updated, "side_effects": False}
-        result = self._start_parallel(project, task, "head")
+        authorization_token = _preflight.get("authorization_token")
+        if not isinstance(authorization_token, str) or not authorization_token:
+            raise PolicyError("Dashboard parallel authorization is missing")
+        try:
+            result = self._start_parallel(project, task, authorization_token)
+        except Exception as exc:
+            self.store.resolve_parallel_preflight(task_id, "failed")
+            self.store.update_task(task_id, status="failed", error=str(exc))
+            raise PolicyError("Dirty parallel start failed; submit the task again") from exc
+        self.store.resolve_parallel_preflight(task_id, normalized)
         updated = self.store.update_task(
             task_id,
             status="running",
@@ -311,21 +328,28 @@ class Orchestrator:
         )
         return {"status": "running", "task": updated, "dashboard": result}
 
-    def _start_parallel(
-        self, project: dict[str, Any], task: dict[str, Any], dirty_policy: str
+    def _parallel_payload(
+        self, project: dict[str, Any], task: dict[str, Any]
     ) -> dict[str, Any]:
         session_file = project.get("primary_session_file")
         if not session_file:
             raise PolicyError("Project primary has no durable Pi session file")
-        return self.dashboard.parallel_spawn({
+        return {
             "projectId": project["project_id"],
             "taskId": task["task_id"],
             "repoRoot": project["repo_path"],
             "primarySessionFile": session_file,
             "primarySessionId": project["primary_session_id"],
             "prompt": task["task"],
-            "dirtyPolicy": dirty_policy,
-        })
+        }
+
+    def _start_parallel(
+        self, project: dict[str, Any], task: dict[str, Any], authorization_token: str | None = None
+    ) -> dict[str, Any]:
+        payload = self._parallel_payload(project, task)
+        if authorization_token:
+            payload["authorizationToken"] = authorization_token
+        return self.dashboard.parallel_spawn(payload)
 
     def validate_integration(
         self, task_id: str, strategy: str, *, hermes_session_id: str

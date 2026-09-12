@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { boundedJson, canonicalRepository, createParallelWorker, redact } from "../server/index.js";
+import Fastify from "fastify";
+import { describe, expect, it, vi } from "vitest";
+import { boundedJson, canonicalRepository, createParallelWorker, redact, register } from "../server/index.js";
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync("git", ["-C", cwd, ...args], { stdio: "ignore" });
@@ -79,6 +80,133 @@ describe("Server C safety helpers", () => {
     expect(sent[0]).toContain("Task: Build feature");
   });
 
+  it("rejects a primary session from a different project", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "orchestrator-project-bind-"));
+    const first = path.join(root, "first");
+    const second = path.join(root, "second");
+    for (const repo of [first, second]) {
+      mkdirSync(repo);
+      git(repo, "init");
+      git(repo, "config", "user.email", "test@example.com");
+      git(repo, "config", "user.name", "Test");
+      git(repo, "commit", "--allow-empty", "-m", "init");
+    }
+    const ctx = {
+      sessionManager: { listAll: () => [{ id: "primary", cwd: first, sessionFile: "/primary.jsonl" }] },
+    } as unknown as Parameters<typeof createParallelWorker>[0];
+
+    await expect(createParallelWorker(ctx, { allowedRoots: [root] }, {
+      projectId: "project-2", taskId: "cross-project", repoRoot: second,
+      primarySessionFile: "/primary.jsonl", primarySessionId: "primary", prompt: "wrong repo",
+    })).rejects.toThrow("different project");
+  });
+
+  it("rejects dirty trees even when a direct caller requests committed HEAD", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "orchestrator-dirty-"));
+    const repo = path.join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init");
+    git(repo, "config", "user.email", "test@example.com");
+    git(repo, "config", "user.name", "Test");
+    git(repo, "commit", "--allow-empty", "-m", "init");
+    writeFileSync(path.join(repo, "untracked.txt"), "dirty\n");
+    const ctx = {
+      sessionManager: { listAll: () => [{ id: "primary", cwd: repo, sessionFile: "/primary.jsonl" }] },
+    } as unknown as Parameters<typeof createParallelWorker>[0];
+    const request = {
+      projectId: "project-1", taskId: "dirty-head", repoRoot: repo,
+      primarySessionFile: "/primary.jsonl", primarySessionId: "primary", prompt: "dirty",
+      dirtyPolicy: "head",
+    } as unknown as Parameters<typeof createParallelWorker>[2];
+
+    await expect(createParallelWorker(ctx, { allowedRoots: [root] }, request)).rejects.toThrow(
+      "use Hermes to authorize committed HEAD",
+    );
+  });
+
+  it("issues a canonical one-time dirty authorization before spawning", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "orchestrator-authorize-"));
+    const repo = path.join(root, "repo");
+    const alias = path.join(root, "alias");
+    mkdirSync(repo);
+    git(repo, "init");
+    git(repo, "config", "user.email", "test@example.com");
+    git(repo, "config", "user.name", "Test");
+    git(repo, "commit", "--allow-empty", "-m", "init");
+    writeFileSync(path.join(repo, "dirty.txt"), "dirty\n");
+    symlinkSync(repo, alias);
+    const app = Fastify();
+    vi.stubEnv("PI_ORCHESTRATOR_AUTH_SECRET", "test-secret");
+    const sessions = [{ id: "primary", cwd: repo, sessionFile: "/primary.jsonl", status: "idle" }];
+    const ctx = {
+      fastify: app,
+      getPluginConfig: () => ({ allowedRoots: [root], journalPath: path.join(root, "journal.json") }),
+      sessionManager: { listAll: () => sessions },
+      spawnSession: async (options: { cwd: string }) => {
+        sessions.push({ id: "child", cwd: options.cwd, sessionFile: "/child.jsonl", status: "idle" });
+        return { success: true, spawnToken: "spawn-token" };
+      },
+      sendToSession: vi.fn(() => true),
+      abortSpawnedRun: vi.fn(async () => true),
+      logger: { error: vi.fn() },
+      eventStore: { getEvents: () => [] },
+      emitEventToSession: vi.fn(() => true),
+    } as unknown as Parameters<typeof register>[0];
+    register(ctx);
+    const body = {
+      projectId: "project-1", taskId: "authorized-task", repoRoot: alias,
+      primarySessionFile: "/primary.jsonl", primarySessionId: "primary", prompt: "authorized work",
+    };
+
+    const unauthenticated = await app.inject({
+      method: "POST", url: "/api/hermes-orchestrator/parallel/authorize", payload: body,
+    });
+    expect(unauthenticated.statusCode).toBe(403);
+    const unauthenticatedSpawn = await app.inject({
+      method: "POST", url: "/api/hermes-orchestrator/parallel", payload: body,
+    });
+    expect(unauthenticatedSpawn.statusCode).toBe(403);
+    const authorization = await app.inject({
+      method: "POST", url: "/api/hermes-orchestrator/parallel/authorize", payload: body,
+      headers: { "x-hermes-orchestrator-authorization": "test-secret" },
+    });
+    expect(authorization.statusCode).toBe(200);
+    const token = authorization.json().authorizationToken as string;
+    expect(token).toBeTruthy();
+
+    const headers = { "x-hermes-orchestrator-authorization": "test-secret" };
+    const denied = await app.inject({
+      method: "POST", url: "/api/hermes-orchestrator/parallel",
+      headers, payload: { ...body, authorizationToken: "wrong" },
+    });
+    expect(denied.statusCode).toBe(409);
+    const changed = await app.inject({
+      method: "POST", url: "/api/hermes-orchestrator/parallel",
+      headers, payload: { ...body, prompt: "different work", authorizationToken: token },
+    });
+    expect(changed.statusCode).toBe(409);
+
+    const started = await app.inject({
+      method: "POST", url: "/api/hermes-orchestrator/parallel",
+      headers, payload: { ...body, authorizationToken: token },
+    });
+    expect(started.statusCode).toBe(200);
+    const transaction = await app.inject({
+      method: "GET", url: "/api/hermes-orchestrator/transaction/authorized-task",
+    });
+    expect(transaction.json().repoRoot).toBe(repo);
+    expect(transaction.json()).not.toHaveProperty("authorizationTokenHash");
+    expect(transaction.json()).not.toHaveProperty("spawnToken");
+    const deniedIntegration = await app.inject({
+      method: "POST",
+      url: "/api/hermes-orchestrator/child/authorized-task/integrate",
+      payload: { strategy: "merge" },
+    });
+    expect(deniedIntegration.statusCode).toBe(403);
+    await app.close();
+    vi.unstubAllEnvs();
+  });
+
   it("rolls back the worktree when Dashboard spawn fails", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "orchestrator-rollback-"));
     const repo = path.join(root, "repo");
@@ -88,7 +216,7 @@ describe("Server C safety helpers", () => {
     git(repo, "config", "user.name", "Test");
     git(repo, "commit", "--allow-empty", "-m", "init");
     const ctx = {
-      sessionManager: { listAll: () => [{ id: "primary", sessionFile: "/sessions/primary.jsonl" }] },
+      sessionManager: { listAll: () => [{ id: "primary", cwd: repo, sessionFile: "/sessions/primary.jsonl" }] },
       spawnSession: async () => ({ success: false, message: "no spawn" }),
       abortSpawnedRun: async () => true,
     } as unknown as Parameters<typeof createParallelWorker>[0];

@@ -2,4 +2,4 @@
 
 | File | Purpose |
 | ------ | --------- |
-| `index.ts` | Appends successful child integration metadata to the primary Pi JSONL as a custom entry without LLM context. |
+| `index.ts` | Appends integration history and delivers validated queue/steer events through Pi-native prompt modes. |

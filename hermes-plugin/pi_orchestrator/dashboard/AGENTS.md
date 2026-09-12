@@ -3,4 +3,4 @@
 | File | Purpose |
 | ------ | --------- |
 | `__init__.py` | Dashboard integration package marker. |
-| `client.py` | Reconnecting browser WebSocket and bounded REST client with durable replay cursors. |
+| `client.py` | Reconnecting browser WebSocket plus bounded REST client with replay cursors and private preflight authentication. |

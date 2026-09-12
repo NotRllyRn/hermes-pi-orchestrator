@@ -17,6 +17,8 @@ class Dashboard:
         self.sent = []
         self.spawned = []
         self.parallel = []
+        self.authorized = []
+        self.parallel_error: str | None = None
         self.integrated = []
         self.dirty = False
 
@@ -39,8 +41,14 @@ class Dashboard:
     def diagnostics(self, session_id, kind, limit):
         return {"session": session_id, "kind": kind, "limit": limit}
 
+    def parallel_authorize(self, payload):
+        self.authorized.append(payload)
+        return {"authorizationToken": "one-time-token"}
+
     def parallel_spawn(self, payload):
         self.parallel.append(payload)
+        if self.parallel_error:
+            raise RuntimeError(self.parallel_error)
         return {
             "sessionId": "child-1", "sessionFile": "/sessions/child.jsonl",
             "worktreePath": "/repos/demo-worktree", "branch": "hermes/demo",
@@ -142,7 +150,30 @@ def test_dirty_parallel_requires_a_second_later_choice(tmp_path):
         pending["task_id"], "head", hermes_session_id="hermes-1"
     )
     assert result["status"] == "running"
-    assert dashboard.parallel[0]["dirtyPolicy"] == "head"
+    assert dashboard.authorized[0]["taskId"] == pending["task_id"]
+    assert dashboard.parallel[0]["authorizationToken"] == "one-time-token"
+
+
+def test_failed_dirty_spawn_keeps_preflight_pending(tmp_path):
+    store, dashboard, service, _project = setup_project(tmp_path)
+    dashboard.dirty = True
+    store.capture_turn("hermes-1", "telegram:42", "new task")
+    pending = service.submit_task(
+        "repo", "new task", route="telegram:42", hermes_session_id="hermes-1"
+    )
+    store.capture_turn("hermes-1", "telegram:42", "Parallel")
+    service.resolve_task(pending["decision_id"], "parallel", hermes_session_id="hermes-1")
+    store.capture_turn("hermes-1", "telegram:42", "Committed HEAD")
+    dashboard.parallel_error = "temporary failure"
+
+    with pytest.raises(PolicyError, match="submit the task again"):
+        service.resolve_parallel_preflight(
+            pending["task_id"], "head", hermes_session_id="hermes-1"
+        )
+
+    assert store.get_parallel_preflight(pending["task_id"])["status"] == "resolved"
+    assert store.get_parallel_preflight(pending["task_id"])["authorization_token"] is None
+    assert store.get_task(pending["task_id"])["status"] == "failed"
 
 
 def test_parallel_settle_waits_for_explicit_review_integration(tmp_path):

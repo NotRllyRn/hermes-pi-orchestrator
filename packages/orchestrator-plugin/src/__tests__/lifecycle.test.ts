@@ -1,7 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import { childReview, integrateChild } from "../server/lifecycle.js";
 import { TransactionJournal } from "../server/transactions.js";
@@ -40,15 +40,38 @@ describe("parallel child lifecycle", () => {
     const { journal } = fixture();
     const ctx = {
       eventStore: { getEvents: () => [{ eventType: "agent_settled" }] },
+      sessionManager: { listAll: () => [{ id: "child-session", status: "idle" }] },
     } as unknown as Parameters<typeof childReview>[0];
     const review = childReview(ctx, journal, "task-1") as { git: { changedPaths: string[] } };
     expect(review.git.changedPaths).toEqual(["file.txt"]);
+    expect(journal.get("task-1")?.state).toBe("awaiting_review");
+  });
+
+  it("refuses review while the child is active", () => {
+    const { journal } = fixture();
+    const ctx = {
+      eventStore: { getEvents: () => [] },
+      sessionManager: { listAll: () => [{ id: "child-session", status: "busy" }] },
+    } as unknown as Parameters<typeof childReview>[0];
+
+    expect(() => childReview(ctx, journal, "task-1")).toThrow("still active");
+  });
+
+  it("refuses integration before an explicit settled review", () => {
+    const { journal } = fixture();
+    const ctx = { emitEventToSession: vi.fn() } as unknown as Parameters<typeof integrateChild>[0];
+    expect(() => integrateChild(ctx, journal, "task-1", "merge")).toThrow("enter review");
   });
 
   it("merges only into a clean base branch and records a Pi custom-entry event", () => {
     const { repo, journal } = fixture();
     const emitEventToSession = vi.fn(() => true);
-    const ctx = { emitEventToSession } as unknown as Parameters<typeof integrateChild>[0];
+    const ctx = {
+      emitEventToSession,
+      eventStore: { getEvents: () => [] },
+      sessionManager: { listAll: () => [{ id: "child-session", status: "idle" }] },
+    } as unknown as Parameters<typeof integrateChild>[0];
+    childReview(ctx, journal, "task-1");
 
     const result = integrateChild(ctx, journal, "task-1", "merge");
 

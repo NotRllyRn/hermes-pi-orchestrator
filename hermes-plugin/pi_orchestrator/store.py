@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS parallel_preflights (
   created_evidence_id INTEGER NOT NULL,
   producing_session_id TEXT NOT NULL DEFAULT '',
   route_session_key TEXT NOT NULL DEFAULT '',
+  authorization_token TEXT,
   expires_at INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   choice TEXT,
@@ -128,9 +129,11 @@ class Store:
     def __init__(self, path: str | Path | None = None):
         home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
         self.path = Path(path) if path else home / "pi-orchestrator" / "state.db"
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.path.parent, 0o700)
         self._lock = threading.RLock()
         self._db = sqlite3.connect(self.path, check_same_thread=False)
+        os.chmod(self.path, 0o600)
         self._db.row_factory = sqlite3.Row
         with self._db:
             self._db.executescript(_SCHEMA)
@@ -149,6 +152,11 @@ class Store:
             self._db.execute(
                 "ALTER TABLE decisions ADD COLUMN route_session_key TEXT NOT NULL DEFAULT ''"
             )
+        preflight_columns = {
+            row["name"] for row in self._db.execute("PRAGMA table_info(parallel_preflights)").fetchall()
+        }
+        if "authorization_token" not in preflight_columns:
+            self._db.execute("ALTER TABLE parallel_preflights ADD COLUMN authorization_token TEXT")
         task_columns = {
             row["name"] for row in self._db.execute("PRAGMA table_info(tasks)").fetchall()
         }
@@ -319,14 +327,16 @@ class Store:
         return self.get_task(task_id)
 
     def list_tasks(self, project_id: str | None = None) -> list[dict[str, Any]]:
-        query = "SELECT * FROM tasks"
-        params: tuple[Any, ...] = ()
-        if project_id:
-            query += " WHERE project_id=?"
-            params = (project_id,)
-        query += " ORDER BY created_at DESC"
         with self._lock:
-            rows = self._db.execute(query, params).fetchall()
+            if project_id:
+                rows = self._db.execute(
+                    "SELECT * FROM tasks WHERE project_id=? ORDER BY created_at DESC",
+                    (project_id,),
+                ).fetchall()
+            else:
+                rows = self._db.execute(
+                    "SELECT * FROM tasks ORDER BY created_at DESC"
+                ).fetchall()
         return [dict(row) for row in rows]
 
     def create_decision(
@@ -378,17 +388,19 @@ class Store:
         evidence_id: int,
         producing_session_id: str,
         route_session_key: str,
+        authorization_token: str,
         ttl_seconds: int = 900,
     ) -> dict[str, Any]:
         with self._lock, self._db:
             self._db.execute(
                 """INSERT OR REPLACE INTO parallel_preflights
                    (task_id,project_id,project_version,created_evidence_id,
-                    producing_session_id,route_session_key,expires_at,status)
-                   VALUES(?,?,?,?,?,?,?,'pending')""",
+                    producing_session_id,route_session_key,authorization_token,expires_at,status)
+                   VALUES(?,?,?,?,?,?,?,?,'pending')""",
                 (
                     task["task_id"], task["project_id"], project_version, evidence_id,
-                    producing_session_id, route_session_key, now_ms() + ttl_seconds * 1000,
+                    producing_session_id, route_session_key, authorization_token,
+                    now_ms() + ttl_seconds * 1000,
                 ),
             )
             self._db.execute(
@@ -407,8 +419,8 @@ class Store:
     def resolve_parallel_preflight(self, task_id: str, choice: str) -> dict[str, Any]:
         with self._lock, self._db:
             self._db.execute(
-                """UPDATE parallel_preflights SET status='resolved',choice=?,resolved_at=?
-                   WHERE task_id=? AND status='pending'""",
+                """UPDATE parallel_preflights SET status='resolved',choice=?,resolved_at=?,
+                   authorization_token=NULL WHERE task_id=? AND status='pending'""",
                 (choice, now_ms(), task_id),
             )
         return self.get_parallel_preflight(task_id) or {}

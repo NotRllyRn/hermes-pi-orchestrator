@@ -8,7 +8,7 @@ import { SessionFlowActionsClaim, shouldRenderFlowsSubcard, FlowDashboardClaim, 
 import { GoalChip, hasGoal, GoalControl, FolderGoalsSection, GoalsBoardClaim, GoalDetailClaim, GoalPluginSettings, catalog as goal_catalog } from "@blackbelt-technology/pi-dashboard-goal-plugin";
 import { GrammarSettings, GrammarComposerPanel, catalog as grammar_catalog } from "@blackbelt-technology/pi-dashboard-grammar-plugin";
 import { HermesMemorySettings, catalog as hermes_memory_catalog } from "@blackbelt-technology/pi-dashboard-hermes-memory-plugin";
-import { OrchestratorPanel } from "@notrllyrn/pi-dashboard-orchestrator-plugin";
+import { FolderOrchestratorSection, OrchestratorPanel } from "@notrllyrn/pi-dashboard-orchestrator-plugin";
 import { FolderKbSection, KbSettingsClaim, catalog as kb_catalog } from "@blackbelt-technology/pi-dashboard-kb-plugin";
 import { BuiltInRolesSettings, catalog as roles_catalog } from "@blackbelt-technology/pi-dashboard-roles-plugin";
 import { SubagentsSettings, SubagentPopoutClaim, catalog as subagents_catalog } from "@blackbelt-technology/pi-dashboard-subagents-plugin";
@@ -340,17 +340,26 @@ export const PLUGIN_REGISTRY: RegistryEntry[] = [
         "priority": 100,
         "claims": [
             {
-                "slot": "settings-section",
+                "slot": "sidebar-folder-section",
+                "component": "FolderOrchestratorSection"
+            },
+            {
+                "slot": "shell-overlay-route",
                 "component": "OrchestratorPanel",
-                "tab": "general"
+                "path": "/folder/:encodedCwd/orchestrator",
+                "depth": 2,
+                "parentPath": "/folder/:encodedCwd",
+                "presentation": "page"
             }
         ],
         "client": "./src/client/index.tsx",
         "server": "./src/server/index.ts",
+        "bridge": "./src/bridge/index.ts",
         "configSchema": "./src/configSchema.json"
     },
     claims: [
-      { pluginId: "hermes-pi-orchestrator", priority: 100, slot: "settings-section", tab: "general", Component: OrchestratorPanel },
+      { pluginId: "hermes-pi-orchestrator", priority: 100, slot: "sidebar-folder-section", Component: FolderOrchestratorSection },
+      { pluginId: "hermes-pi-orchestrator", priority: 100, slot: "shell-overlay-route", path: "/folder/:encodedCwd/orchestrator", depth: 2, parentPath: "/folder/:encodedCwd", presentation: "page", Component: OrchestratorPanel },
     ],
   },
   {
@@ -494,4 +503,4 @@ export const PLUGIN_REGISTRY: RegistryEntry[] = [
   },
 ];
 
-export const PLUGIN_REGISTRY_HASH = "f0b60e78d2343ada3ef70ba8dcaebfcae342e14a3a8fcedd69e50758c30087b1";
+export const PLUGIN_REGISTRY_HASH = "b2e8154f5a3d6268b420927bfdd9f3548167f88bbb123baedd7fd9aaefc7521c";

@@ -9,10 +9,15 @@ export function childReview(
   journal: TransactionJournal,
   taskId: string,
 ): Record<string, unknown> {
-  const transaction = completeTransaction(journal, taskId);
+  const transaction = markReviewable(ctx, journal, taskId);
   const worktree = required(transaction.worktreePath, "worktree path");
   const base = required(transaction.baseCommit, "base commit");
   const sessionId = required(transaction.sessionId, "session id");
+  const status = git(worktree, ["status", "--porcelain"]);
+  const commits = lines(git(worktree, ["log", "--format=%H%x09%s", `${base}..HEAD`]));
+  const diffStat = git(worktree, ["diff", "--stat", `${base}...HEAD`]);
+  const changedPaths = lines(git(worktree, ["diff", "--name-only", `${base}...HEAD`]));
+  const events = ctx.eventStore.getEvents(sessionId);
   return {
     taskId,
     state: transaction.state,
@@ -21,12 +26,17 @@ export function childReview(
     worktreePath: worktree,
     baseCommit: base,
     git: {
-      status: git(worktree, ["status", "--porcelain"]),
-      commits: lines(git(worktree, ["log", "--format=%H%x09%s", `${base}..HEAD`])),
-      diffStat: git(worktree, ["diff", "--stat", `${base}...HEAD`]),
-      changedPaths: lines(git(worktree, ["diff", "--name-only", `${base}...HEAD`])),
+      status: status.slice(0, 4_000),
+      commits: commits.slice(-100).map((line) => line.slice(0, 500)),
+      diffStat: diffStat.slice(0, 8_000),
+      changedPaths: changedPaths.slice(0, 200).map((line) => line.slice(0, 500)),
     },
-    recentEvents: ctx.eventStore.getEvents(sessionId).slice(-20),
+    recentEvents: events.slice(-20).map((event) => {
+      const item = event as Record<string, unknown>;
+      return { eventType: item.eventType, timestamp: item.timestamp };
+    }),
+    truncated: status.length > 4_000 || commits.length > 100 || diffStat.length > 8_000 ||
+      changedPaths.length > 200,
   };
 }
 
@@ -36,15 +46,9 @@ export function integrateChild(
   taskId: string,
   strategy: IntegrationStrategy,
 ): TransactionRecord {
-  const transaction = completeTransaction(journal, taskId);
-  if (transaction.state !== "complete") {
-    if (transaction.integrationStrategy !== strategy) {
-      throw new Error("parallel child already has a different integration outcome");
-    }
-    if (transaction.state === "integrated" && !transaction.annotationRecorded) {
-      return recordAnnotation(ctx, journal, transaction);
-    }
-    return transaction;
+  const transaction = lifecycleTransaction(journal, taskId);
+  if (transaction.state !== "awaiting_review") {
+    return existingOutcome(ctx, journal, transaction, strategy);
   }
   if (strategy === "leave_branch") {
     return journal.update(taskId, { state: "retained", integrationStrategy: strategy });
@@ -70,7 +74,7 @@ export function integrateChild(
     else cherryPick(repoRoot, required(transaction.baseCommit, "base commit"), branch);
   } catch (error) {
     journal.update(taskId, {
-      state: "complete",
+      state: "awaiting_review",
       integrationStrategy: undefined,
       integrationError: error instanceof Error ? error.message : String(error),
     });
@@ -81,6 +85,24 @@ export function integrateChild(
     state: "integrated", integrationStrategy: strategy, integratedCommit, annotationRecorded: false,
   });
   return recordAnnotation(ctx, journal, integrated);
+}
+
+function existingOutcome(
+  ctx: ServerPluginContext,
+  journal: TransactionJournal,
+  transaction: TransactionRecord,
+  strategy: IntegrationStrategy,
+): TransactionRecord {
+  if (transaction.state === "complete") {
+    throw new Error("parallel child must settle and enter review before integration");
+  }
+  if (transaction.integrationStrategy !== strategy) {
+    throw new Error("parallel child already has a different integration outcome");
+  }
+  if (transaction.state === "integrated" && !transaction.annotationRecorded) {
+    return recordAnnotation(ctx, journal, transaction);
+  }
+  return transaction;
 }
 
 function recordAnnotation(
@@ -103,10 +125,28 @@ function recordAnnotation(
   return updated;
 }
 
-function completeTransaction(journal: TransactionJournal, taskId: string): TransactionRecord {
+function markReviewable(
+  ctx: ServerPluginContext,
+  journal: TransactionJournal,
+  taskId: string,
+): TransactionRecord {
+  const transaction = lifecycleTransaction(journal, taskId);
+  if (transaction.state === "awaiting_review") return transaction;
+  if (transaction.state !== "complete") return transaction;
+  const sessionId = required(transaction.sessionId, "session id");
+  const session = (ctx.sessionManager.listAll() as Array<{ id?: string; sessionId?: string; status?: string }>).find(
+    (item) => (item.id ?? item.sessionId) === sessionId,
+  );
+  if (!session || !["idle", "ended"].includes(session.status ?? "")) {
+    throw new Error("parallel child is still active");
+  }
+  return journal.update(taskId, { state: "awaiting_review" });
+}
+
+function lifecycleTransaction(journal: TransactionJournal, taskId: string): TransactionRecord {
   const transaction = journal.get(taskId);
-  if (!transaction || !["complete", "integrated", "retained"].includes(transaction.state)) {
-    throw new Error("parallel child transaction is not complete");
+  if (!transaction || !["complete", "awaiting_review", "integrated", "retained"].includes(transaction.state)) {
+    throw new Error("parallel child transaction is not ready for lifecycle actions");
   }
   return transaction;
 }
