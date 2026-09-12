@@ -4,13 +4,23 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import Fastify from "fastify";
 import { describe, expect, it, vi } from "vitest";
-import { boundedJson, canonicalRepository, createParallelWorker, redact, register } from "../server/index.js";
+import activateServer, {
+  boundedJson,
+  canonicalRepository,
+  createParallelWorker,
+  redact,
+  register,
+} from "../server/index.js";
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync("git", ["-C", cwd, ...args], { stdio: "ignore" });
 }
 
 describe("Server C safety helpers", () => {
+  it("exports the Dashboard server activator as default", () => {
+    expect(activateServer).toBe(register);
+  });
+
   it("canonicalizes repositories inside an allowed root", () => {
     const root = mkdtempSync(path.join(tmpdir(), "orchestrator-root-"));
     const repo = path.join(root, "repo");

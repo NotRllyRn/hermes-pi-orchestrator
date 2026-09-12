@@ -627,6 +627,8 @@ export function register(ctx: ServerPluginContext): void {
   });
 }
 
+export default register;
+
 function realpathOrOriginal(value: string): string {
   try {
     return realpathSync(value);
