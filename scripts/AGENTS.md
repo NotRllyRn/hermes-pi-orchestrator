@@ -3,7 +3,7 @@
 Files in this directory. One row per file. Non-source area (migrated from `docs/file-index-skills-misc.md`; source of truth now here). See change: migrate-file-index-to-agents-tree.
 
 | File | Purpose |
-|------|---------|
+| ------ | --------- |
 | `__tests__/assert-bundled-plugins-complete.test.mjs` | Vitest unit tests for packages/electron/scripts/assert-bundled-plugins-complete.mjs (subprocess-driven with… → see `__tests__/assert-bundled-plugins-complete.test.mjs.AGENTS.md` |
 | `__tests__/check-pi-settings-paths.test.mjs` | Drives `absoluteSourceViolations` directly (12 cases) so detection is pinned independently of what `.pi/settings.json` currently holds. Negative cases carry the weight: `npm:`/`git:`/`https://`/`ssh://` sources and the bare-string package form must NOT be flagged, else the guard is unusable. See issue #371. |
 | `__tests__/biome-undeclared-dependencies.test.mjs` | Guardrails for the `noUndeclaredDependencies` config in `biome.json`. → see `__tests__/biome-undeclared-dependencies.test.mjs.AGENTS.md` |
@@ -77,4 +77,3 @@ Files in this directory. One row per file. Non-source area (migrated from `docs/
 | `windows-job-object-smoke.ts` | Windows Job Object kill-on-close smoke (task 7.4a; CI: `ci-e2e-electron.yml` job `job-object-windows`). → see `windows-job-object-smoke.ts.AGENTS.md` |
 | `windows-liveness-smoke.ts` | Windows boot-parent-liveness smoke (CI: `_smoke.yml` standalone-install-smoke-windows). → see `windows-liveness-smoke.ts.AGENTS.md` |
 | `windows-introspection-smoke.ts` | Windows introspection smoke driver (CI: `_smoke.yml` standalone-install-smoke-windows). → see `windows-introspection-smoke.ts.AGENTS.md` |
-

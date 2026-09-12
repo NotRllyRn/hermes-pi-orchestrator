@@ -3,7 +3,7 @@
 Files in this directory. One row per source file.
 
 | File | Purpose |
-|------|---------|
+| ------ | --------- |
 | `config-validator.ts` | `validatePluginConfig`, `applySchemaDefaults` — Ajv JSON-Schema 7 validation for plugin config writes. |
 | `index.ts` | Server-side barrel for `@blackbelt-technology/dashboard-plugin-runtime/server`. Re-exports `loader`, `server-context`, `plugin-status-store`, `config-validator`, `requirement-probes`, `service-probes/pi-model-proxy`, plus pure-TS `../dependency-graph` (avoids pulling React-y main barrel). |
 | `loader.ts` | `discoverPlugins` + `loadServerEntries` (failure-isolated) + `getPluginStatusStore`. Adds `deterministicSerializePlugins` (sorted manifest fields, stable JSON) + `pluginRegistryHash(plugins)` (sha256 over serialization). Shared by vite-plugin (build-time `PLUGIN_REGISTRY_HASH` emission) + server (`/api/health.bundleHash`). See change: fix-pi-flows-end-to-end. |
