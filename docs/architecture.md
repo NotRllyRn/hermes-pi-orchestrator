@@ -129,6 +129,65 @@ TypeScript type definitions shared across all components:
 - `browser-protocol.ts` - Server↔Browser WebSocket messages (includes PromptBus messages: `prompt_request`, `prompt_dismiss`, `prompt_cancel`)
 - `types.ts` - Data models (Session, Workspace, Event, etc.)
 
+## Hermes Pi Orchestrator
+
+### Authority and transport
+
+- Server B runs Hermes Gateway and `hermes-plugin/`.
+- Server C runs Pi, PI Dashboard, project checkouts, and `packages/orchestrator-plugin/`.
+- Server B reaches Server C Dashboard through SSH local-forward `127.0.0.1:18000` → `127.0.0.1:8000`.
+- Dashboard binds loopback on Server C.
+- Dashboard owns Pi sessions, Pi processes, worktrees, and Pi events.
+- Hermes never mounts Server C filesystem state.
+- Hermes owns policy, user evidence, task state, and dirty-tree preflight state.
+- Hermes persists state in `$HERMES_HOME/pi-orchestrator/state.db`.
+- Hermes creates SQLite parent directory mode `0700`.
+- Hermes creates SQLite database mode `0600`.
+
+### Dashboard orchestrator plugin
+
+- `packages/orchestrator-plugin` canonicalizes project roots under configured `allowedRoots`.
+- Plugin binds each project to one canonical primary Pi session.
+- Plugin sends Queue and Steer prompts through Pi bridge custom events.
+- Plugin creates worker worktree and forked Pi session as one transaction.
+- Plugin rolls back created worktree when fork startup fails.
+- Plugin journals transaction phases before and after side effects.
+- Plugin never replays ambiguous spawn or integration side effects.
+- Plugin exposes child review only after child session settles.
+- Plugin builds bounded and redacted review package.
+- Browser UI monitors project, workers, attention, cost, and review state.
+- Browser UI sends Queue, Steer, Review, and Abort actions.
+- Browser UI cannot spawn parallel workers.
+- Browser UI cannot integrate child branches.
+- Hermes calls authenticated parallel and integration routes.
+- Plugin never auto-integrates child work.
+
+### Dirty-tree authorization
+
+- `PI_ORCHESTRATOR_AUTH_SECRET` configures Hermes process on Server B.
+- `PI_ORCHESTRATOR_AUTH_SECRET` configures Dashboard process on Server C.
+- Both services use same random secret.
+- Hermes later-turn concurrency evidence governs clean and dirty parallel starts.
+- `POST /api/hermes-orchestrator/parallel/authorize` requires `PI_ORCHESTRATOR_AUTH_SECRET`.
+- `POST /api/hermes-orchestrator/parallel` requires `PI_ORCHESTRATOR_AUTH_SECRET`.
+- `POST /api/hermes-orchestrator/child/:taskId/integrate` requires `PI_ORCHESTRATOR_AUTH_SECRET`.
+- Dashboard issues one random authorization token per dirty-tree request.
+- Dashboard stores token hash, never token plaintext.
+- Dashboard expires token after 15 minutes.
+- Dashboard binds token to canonical repository root.
+- Dashboard binds token to project id.
+- Dashboard binds token to primary session id and primary session file.
+- Dashboard binds token to prompt.
+- Dashboard binds token to resolved base branch and base commit.
+- Dashboard consumes token before worker spawn.
+- Hermes stores token plaintext in owner-only SQLite preflight state.
+- Hermes requires later-turn explicit `Committed HEAD` evidence before dirty-token use.
+- Hermes clears token after success, Wait, or failure.
+- Failed dirty-tree spawn resolves preflight as failed.
+- Failed dirty-tree spawn requires task resubmission.
+- Integration requires settled child review.
+- Integration requires later explicit Hermes user-turn evidence.
+
 ## Data Flow
 
 ### Event Flow (pi → browser)

@@ -1,6 +1,6 @@
 # Hermes Pi Orchestrator
 
-Persistent orchestration between [Hermes Agent](https://github.com/NousResearch/hermes-agent), the [Pi coding agent](https://github.com/badlogic/pi-mono), and PI Dashboard. Hermes delegates coding work to resumable Pi RPC sessions, receives asynchronous completion messages, and manages a durable global task queue. The browser panel monitors and controls the same sessions across a three-server deployment.
+Persistent orchestration between [Hermes Agent](https://github.com/NousResearch/hermes-agent), the [Pi coding agent](https://github.com/badlogic/pi-mono), and PI Dashboard. Hermes delegates coding work to resumable Pi RPC sessions, receives asynchronous completion messages, and manages a durable global task queue. The browser panel monitors and controls the same sessions across a two-host deployment.
 
 <p align="center">
   <a href="https://github.com/NotRllyRn/hermes-pi-orchestrator">
@@ -23,7 +23,7 @@ Persistent orchestration between [Hermes Agent](https://github.com/NousResearch/
 
 ## Orchestrator quickstart
 
-On Server A, clone this repository and install the Hermes plugin:
+On Server B, clone this repository and install the Hermes plugin:
 
 ```bash
 git clone git@github.com:NotRllyRn/hermes-pi-orchestrator.git
@@ -31,11 +31,11 @@ cd hermes-pi-orchestrator
 scripts/install-hermes-plugin.sh
 ```
 
-Configure Pi SSH transport and the control API from [`deploy/hermes.env.example`](deploy/hermes.env.example). On Server B, build this fork and configure [`deploy/dashboard.env.example`](deploy/dashboard.env.example). Server C needs Pi, model authentication, project checkouts, and key-authenticated SSH access from Server A.
+Server C runs Pi, project checkouts, this Dashboard fork, and the orchestrator Dashboard plugin. Server B reaches C's loopback-only Dashboard through a persistent SSH local-forward. Configure the shared Hermes-mutation secret with [`deploy/hermes.env.example`](deploy/hermes.env.example) and [`deploy/dashboard.env.example`](deploy/dashboard.env.example).
 
 Full commands, service environment files, security boundaries, and smoke tests: **[`deploy/README.md`](deploy/README.md)**.
 
-Hermes exposes `pi_start`, `pi_send`, `pi_status`, `pi_stop`, `pi_queue`, and `pi_queue_status`. Dashboard controls appear under **Settings → General → Hermes Pi Orchestrator**.
+Hermes exposes project registration, compact status, task submission/resolution, review, integration, abort, activity, and diagnostics tools. Each Dashboard project also gets an **Orchestrator** panel.
 
 ---
 
@@ -85,7 +85,7 @@ Three install paths, pick one:
 Download a pre-built installer from [GitHub Releases](https://github.com/BlackBeltTechnology/pi-agent-dashboard/releases):
 
 | Platform | Download |
-|----------|----------|
+| ---------- | ---------- |
 | **macOS** (Apple Silicon / Intel) | `.dmg` (arm64 / x64) |
 | **Linux** (x64 / ARM64) | `.deb` or `.AppImage` |
 | **Windows** (x64 / ARM64) | `.zip` |
@@ -99,9 +99,11 @@ On first launch a setup wizard walks you through mode selection (standalone vs. 
 **First-run unblocking (unsigned binaries):**
 
 - **macOS** — the DMGs are not yet notarized. Either right-click `PI-Dashboard.app` → *Open* the first time, or clear all extended attributes from Terminal:
+
   ```bash
   xattr -cr /Applications/PI-Dashboard.app
   ```
+
   Use `-cr` (clear, recursive) rather than `-d com.apple.quarantine` — it's idempotent and won't print `No such xattr: com.apple.quarantine` when the attribute isn't there. That message is harmless; it just means quarantine was never set or already cleared.
 - **Windows** — SmartScreen warns on first launch. Click *More info → Run anyway*, or right-click the downloaded `.exe` / `.zip` → *Properties* → tick *Unblock* → *OK* before running. For ZIPs, unblock the archive before extracting.
 
@@ -130,7 +132,7 @@ The bridge extension auto-starts the dashboard server on first launch:
 🌐 Dashboard started at http://localhost:8000
 ```
 
-Open **http://localhost:8000** in any browser. All active pi sessions appear automatically. See [Prerequisites](#prerequisites) for Node.js / build-tool requirements.
+Open **<http://localhost:8000>** in any browser. All active pi sessions appear automatically. See [Prerequisites](#prerequisites) for Node.js / build-tool requirements.
 
 #### Windows install (PowerShell, Administrator)
 
@@ -213,6 +215,7 @@ State persists in a named volume; API keys seed into `auth.json` on first run (o
 ## Features
 
 **Sessions & chat**
+
 - **Real-time session mirroring** — all active pi sessions with live streaming messages
 - **Bidirectional interaction** — send prompts and commands from the browser
 - **Session statistics** — token counts, costs, model info, thinking level, context usage bar
@@ -222,6 +225,7 @@ State persists in a named volume; API keys seed into `auth.json` on first run (o
 - **Force kill escalation** — two-click Stop button; first click sends soft abort, second force-kills (SIGTERM → SIGKILL). Session preserved as "ended" for resume/fork.
 
 **Workspace & UI**
+
 - **Workspace management** — organize sessions by project folder with pinned directories and drag-to-reorder
 - **Command autocomplete** — `/` prefix triggers a filtering dropdown
 - **Mobile-friendly** — responsive layout with swipe drawer, touch targets, and mobile action menus
@@ -230,6 +234,7 @@ State persists in a named volume; API keys seed into `auth.json` on first run (o
 - **Searchable select dialogs** — keyboard-navigable picker with real-time filtering (OpenSpec changes, flow commands)
 
 **Integrations**
+
 - **PromptBus architecture** — unified prompt routing with adapters (TUI, dashboard, custom). Interactive dialogs (confirm/select/input/editor/multiselect) survive page refresh and server restart. Multiselect uses the bus-routed browser path exclusively (the dashboard `MultiselectRenderer` dialog) since pi 0.70's RPC mode has no working terminal-overlay primitive. First-response-wins semantics with cross-adapter dismissal.
 - **Extension UI System (Phase 1)** — extensions can declare slash-command-triggered modal UIs as data, without authoring React or importing an SDK. Listen on `pi.events.on("ui:list-modules", probe)` and push descriptors into `probe.modules`; the dashboard renders `table` / `grid` / `form` views with row actions, optional confirm-dialog gates, and MDI icons. Modules survive reconnect via the server-side cache; in pure-pi mode descriptors stay dormant. See `openspec/specs/extension-ui-system/spec.md` for the protocol contract.
 - **pi-flows integration** — live flow execution dashboard with agent cards, detail views, flow graph, summary, abort/auto controls. Launch flows and design new ones with Flow Architect, all from the browser. Fork decisions and subagent dialogs forwarded via PromptBus.
@@ -240,11 +245,13 @@ State persists in a named volume; API keys seed into `auth.json` on first run (o
 - **MCP endpoint** — `POST /mcp` exposes dashboard sessions to MCP clients (Claude Desktop, Cursor) once the server runs. Every request needs a bearer credential, including localhost. `~/.pi/agent/mcp.json` gets a `pi-dashboard` entry automatically on first server start; external clients authenticate with a paired-device token. Local pi sessions need `pi-mcp-adapter >= 2.20.0`.
 
 **Dev tools**
+
 - **Integrated terminal** — full browser-based terminal emulator (xterm.js + node-pty) with ANSI colors, scrollback, and keep-alive
 - **Diff viewer** — side-by-side and unified diff views with file tree navigation.
 - **Editor integration** — open files in VS Code, Cursor, etc. directly from tool call cards
 
 **Networking & distribution**
+
 - **Network discovery** — mDNS-based auto-discovery of other dashboard servers on the local network
 - **Zrok tunnel** — optional persistent public URL via reserved shares (see [Configuration → Tunnel](#tunnel-zrok))
 
@@ -269,7 +276,7 @@ This keeps plugin-provided dynamic content, package names, model names, and comm
 **Only needed for Quickstart paths B and C.** The Electron app (path A) bundles everything in standalone mode.
 
 | Requirement | Why | Install |
-|-------------|-----|---------|
+| ------------- | ----- | --------- |
 | **[pi](https://github.com/badlogic/pi-mono)** | The AI coding agent the dashboard monitors | `npm i -g @mariozechner/pi-coding-agent` |
 | **pi-mcp-adapter ≥ 2.20.0** | Lets local pi sessions call the dashboard's `POST /mcp` endpoint | `pi ext update pi-mcp-adapter` |
 | **Node.js ≥ 22.18.0** | Server runtime. Older 22.x / 24.x < 24.3.0 are affected by [nodejs/node#58515](https://github.com/nodejs/node/issues/58515) which crashes Fastify at startup. | [nodejs.org](https://nodejs.org/) |
@@ -295,7 +302,7 @@ Optional:
 CLI flags → environment variables → config file → built-in defaults.
 
 | CLI flag | Env var | Config key | Default | Description |
-|----------|---------|------------|---------|-------------|
+| ---------- | --------- | ------------ | --------- | ------------- |
 | `--port` | `PI_DASHBOARD_PORT` | `port` | `8000` | HTTP + browser WebSocket port |
 | `--pi-port` | `PI_DASHBOARD_PI_PORT` | `piPort` | `9999` | Pi extension WebSocket port |
 | `--dev` | — | — | `false` | Development mode (proxy to Vite) |
@@ -363,7 +370,7 @@ OAuth2 authentication guards external (tunnel) access. Localhost is always ungua
 ```
 
 | Key | Required | Description |
-|-----|----------|-------------|
+| ----- | ---------- | ------------- |
 | `auth.secret` | No | JWT signing secret (auto-generated if omitted) |
 | `auth.providers` | Yes | Map of provider → `{ clientId, clientSecret, issuerUrl? }` |
 | `auth.allowedUsers` | No | Allowlist: usernames, emails, or `*@domain` wildcards. Empty = allow all |
@@ -383,7 +390,7 @@ The dashboard auto-connects a [zrok](https://zrok.io/) tunnel on start when `tun
 Tune how often the server polls known directories for OpenSpec updates (`openspec` block):
 
 | Key | Default | Range | Description |
-|-----|---------|-------|-------------|
+| ----- | --------- | ------- | ------------- |
 | `pollIntervalSeconds` | `30` | `5–3600` | How often each known directory is polled |
 | `maxConcurrentSpawns` | `3` | `1–16` | Cap on concurrent `openspec` CLI invocations |
 | `changeDetection` | `"mtime"` | `"mtime" \| "always"` | `mtime` skips unchanged proposals; `always` polls unconditionally |
@@ -426,6 +433,7 @@ export OPENAI_API_KEY=pi-proxy-<your-proxy-key>
 **Setup:** open Settings → API Proxy in the dashboard UI, enable the proxy, and create an API key.
 
 **Endpoints:**
+
 - `GET /v1/models` — list available models (requires `models:list` scope or `all`)
 - `POST /v1/chat/completions` — OpenAI chat completions, streaming + non-streaming
 - `POST /v1/messages` — Anthropic messages, streaming + non-streaming
@@ -551,7 +559,7 @@ LLM-free templates opt in via `executable: bash` frontmatter and get
 Bash-style history recall and per-session draft persistence:
 
 | Key | Action |
-|-----|--------|
+| ----- | -------- |
 | `Enter` | Send the prompt |
 | `Shift+Enter` | Insert a newline |
 | `ArrowUp` | Recall previous user prompt (caret on first line, no dropdown open). Repeat to walk back |
@@ -568,7 +576,7 @@ Drafts (typed-but-unsent text) are persisted per session in `localStorage` under
 The dashboard integrates tightly with a small, curated set of pi extensions — for custom tool rendering, the Flow dashboard, and anthropic-messages protocol compatibility. The Electron wizard installs them in one go; the **Packages** tab and a top-of-page banner keep them discoverable afterwards.
 
 | Extension | Source | Status | Unlocks |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `pi-anthropic-messages` | `git@github.com:BlackBeltTechnology/pi-anthropic-messages.git` | **required** | Tool calls on Claude-model Anthropic OAuth / 9Router `cc/*` / pi-model-proxy providers. Without it, tool calls fall back to Claude Code's built-in `bash_ide` sandbox and fail. |
 | `pi-dashboard-subagents` | `https://github.com/BlackBeltTechnology/pi-dashboard-subagents.git` | optional (bundled) | `Agent` tool card UI, subagent inspector (inline expand + popout), agent-md path display |
 | `pi-flows` | `git@github.com:BlackBeltTechnology/pi-flows.git` | strongly suggested | Flow dashboard, role aliases (`@planning`, `@coding`, …), subagent / flow_write / flow_results / agent_write / ask_user / skill_read / finish tools |
@@ -690,7 +698,7 @@ graph LR
 ```
 
 | Component | Location | Role |
-|-----------|----------|------|
+| ----------- | ---------- | ------ |
 | **Bridge Extension** | `packages/extension/` | Runs in every pi session. Forwards events, relays commands, auto-starts server, hosts PromptBus. |
 | **Dashboard Server** | `packages/server/` | Aggregates events in-memory, persists metadata to JSON, serves the web client, manages terminals. |
 | **Web Client** | `packages/client/` | React + Tailwind UI with real-time WebSocket updates. |
@@ -729,6 +737,7 @@ curl -s http://localhost:8000/api/health | jq
 ```
 
 Returns:
+
 - `mode` — `"dev"` or `"production"`
 - `server.rss`, `server.heapUsed`, `server.heapTotal` — server memory
 - `server.activeSessions`, `server.totalSessions` — session counts
@@ -842,7 +851,7 @@ pnpm run make                         # Build installer
 Output by platform:
 
 | Platform | Output | Location |
-|----------|--------|----------|
+| ---------- | -------- | ---------- |
 | macOS | `.dmg` | `packages/electron/out/make/` |
 | Linux | `.deb` + `.AppImage` | `packages/electron/out/make/` |
 | Windows | `.zip` | `packages/electron/out/make/` |
@@ -918,7 +927,7 @@ git push --follow-tags
 This runs CI, publishes to npm with `--provenance` for supply-chain transparency, and builds Electron installers for all platforms on native runners:
 
 | Runner | Platform | Outputs |
-|--------|----------|---------|
+| -------- | ---------- | --------- |
 | `macos-14` | macOS arm64 | `.dmg` (Apple Silicon) |
 | `macos-15-intel` | macOS x64 | `.dmg` (Intel; last GitHub-hosted x86_64 image, EOL 2027-08) |
 | `ubuntu-latest` | Linux x64 | `.deb` + `.AppImage` |
@@ -960,7 +969,7 @@ Trusted Publishing requires **npm CLI ≥ 11.5.1**. The workflow upgrades npm au
 **One-time npm-side setup** — repeat once per published package (five scoped workspaces; `@blackbelt-technology/pi-dashboard-electron` is private and skipped):
 
 | Package |
-|---|
+| --- |
 | `@blackbelt-technology/pi-agent-dashboard` (root) |
 | `@blackbelt-technology/pi-dashboard-shared` |
 | `@blackbelt-technology/pi-dashboard-extension` |

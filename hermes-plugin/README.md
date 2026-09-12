@@ -27,6 +27,9 @@ Queue maps to Dashboard `delivery: "followUp"`; Steer maps to `delivery: "steer"
 ```sh
 # Local end of Server B's independently supervised SSH tunnel to Server C.
 export PI_DASHBOARD_URL='http://127.0.0.1:18000'
+export PI_ORCHESTRATOR_AUTH_SECRET='<same random secret configured on Server C>'
 ```
 
-State lives in `$HERMES_HOME/pi-orchestrator/state.db` with SQLite WAL. Pi JSONL remains authoritative on Server C. Browser replay sequence cursors prevent duplicate activity and notifications after reconnect.
+`PI_ORCHESTRATOR_AUTH_SECRET` authenticates Hermes-only parallel authorization, spawn, and child integration requests. Send it only through the B→C SSH tunnel.
+
+State lives in `$HERMES_HOME/pi-orchestrator/state.db` with SQLite WAL and owner-only permissions. Pi JSONL remains authoritative on Server C. Browser replay sequence cursors prevent duplicate activity and notifications after reconnect.
