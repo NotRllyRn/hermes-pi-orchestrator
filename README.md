@@ -1,3 +1,7 @@
+# Archived
+
+This repository is no longer being maintained on this fork.
+
 # Hermes Pi Orchestrator
 
 Persistent orchestration between [Hermes Agent](https://github.com/NousResearch/hermes-agent), the [Pi coding agent](https://github.com/badlogic/pi-mono), and PI Dashboard. Hermes delegates coding work to resumable Pi RPC sessions, receives asynchronous completion messages, and manages a durable global task queue. The browser panel monitors and controls the same sessions across a two-host deployment.
